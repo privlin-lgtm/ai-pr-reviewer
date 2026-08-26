@@ -2,12 +2,21 @@ import { CategoryChart } from "../components/dashboard/category-chart";
 import { ReviewHistory } from "../components/dashboard/review-history";
 import { StatCard } from "../components/dashboard/stat-card";
 import { loadDashboardData } from "../src/dashboard/data";
+import {
+  resolveDashboardScope,
+  UnconfiguredDashboardIdentityProvider,
+} from "../src/dashboard/scope";
 import type { DashboardData } from "../src/dashboard/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const result = await loadDashboardData();
+  const identityProvider = new UnconfiguredDashboardIdentityProvider();
+  const identity = await identityProvider.getIdentity();
+  const result =
+    process.env.DATABASE_URL === undefined
+      ? await loadDashboardData(null)
+      : await resolveAndLoadDashboardData(identity);
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl p-6 lg:p-10">
@@ -29,6 +38,13 @@ export default async function DashboardPage() {
         />
       ) : null}
 
+      {result.status === "unauthenticated" ? (
+        <DatabaseNotice
+          title="Dashboard authentication is not configured"
+          message="Connect a server-side identity provider that resolves a User ID and RepositoryMembership scope before viewing repository metrics."
+        />
+      ) : null}
+
       {result.status === "unavailable" ? (
         <DatabaseNotice title="Dashboard data is unavailable" message={result.message} />
       ) : null}
@@ -36,6 +52,17 @@ export default async function DashboardPage() {
       {result.status === "ready" ? <DashboardContent data={result.data} /> : null}
     </main>
   );
+}
+
+async function resolveAndLoadDashboardData(
+  identity: Awaited<ReturnType<UnconfiguredDashboardIdentityProvider["getIdentity"]>>,
+) {
+  if (identity === null) {
+    return loadDashboardData(null);
+  }
+
+  const { prisma } = await import("../src/lib/prisma");
+  return loadDashboardData(await resolveDashboardScope(prisma, identity));
 }
 
 function DashboardContent({

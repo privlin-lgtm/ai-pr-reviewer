@@ -18,6 +18,7 @@ export type {
   PublishedReview,
   PullRequestAnalysisEnqueuer,
   PullRequestDiff,
+  PullRequestMetadata,
   PullRequestTarget,
   PullRequestWebhookEvent,
   ReviewCommentInput,

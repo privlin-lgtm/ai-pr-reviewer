@@ -32,5 +32,6 @@ export interface DashboardData {
 
 export type DashboardLoadResult =
   | { data: DashboardData; status: "ready" }
+  | { status: "unauthenticated" }
   | { status: "unconfigured" }
   | { message: string; status: "unavailable" };

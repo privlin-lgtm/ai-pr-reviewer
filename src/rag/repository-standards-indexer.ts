@@ -57,6 +57,12 @@ export class RepositoryStandardsIndexer {
       indexedChunks += chunks.length;
     }
 
+    await this.documentStore.completeSnapshot({
+      branch: target.branch,
+      paths: documents.map((document) => document.path),
+      repositoryId: target.repositoryId,
+    });
+
     return {
       indexedChunks,
       indexedDocuments: documents.length,

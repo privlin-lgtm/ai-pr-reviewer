@@ -7,6 +7,7 @@ import type {
   GitHubPullRequestService,
   PublishedReview,
   PullRequestDiff,
+  PullRequestMetadata,
   PullRequestTarget,
   ReviewCommentInput,
   ReviewSubmission,
@@ -39,6 +40,19 @@ export class OctokitPullRequestService implements GitHubPullRequestService {
     }
 
     return { ...target, content: data };
+  }
+
+  async fetchMetadata(target: PullRequestTarget): Promise<PullRequestMetadata> {
+    const octokit = await this.getInstallationOctokit(target.installationId);
+    const response = await this.run(() =>
+      octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}", {
+        owner: target.owner,
+        repo: target.repository,
+        pull_number: target.pullNumber,
+      }),
+    );
+
+    return toPullRequestMetadata(target, readResponseData(response));
   }
 
   async listChangedFiles(
@@ -117,6 +131,49 @@ function toChangedFiles(data: unknown): ChangedFile[] {
   return data.map((file) => toChangedFile(file));
 }
 
+function toPullRequestMetadata(
+  target: PullRequestTarget,
+  data: unknown,
+): PullRequestMetadata {
+  if (!isRecord(data)) {
+    throw new Error("GitHub pull request response is not an object.");
+  }
+
+  const base = readObject(data, "base");
+  const head = readObject(data, "head");
+  const user = readObject(data, "user");
+  const state = readString(data, "state");
+  const merged = data["merged"] === true;
+  return {
+    ...target,
+    authorGithubLogin: readString(user, "login"),
+    authorGithubUserId: readOptionalInteger(user, "id") ?? null,
+    baseRef: readString(base, "ref"),
+    baseSha: readString(base, "sha"),
+    body: readOptionalString(data, "body") ?? null,
+    closedAt: readOptionalDate(data, "closed_at"),
+    createdAt: readDate(data, "created_at"),
+    githubPullRequestId: readInteger(data, "id"),
+    headRef: readString(head, "ref"),
+    headSha: readString(head, "sha"),
+    isDraft: data["draft"] === true,
+    mergedAt: readOptionalDate(data, "merged_at"),
+    state: merged ? "MERGED" : toPullRequestState(state),
+    title: readString(data, "title"),
+    updatedAt: readDate(data, "updated_at"),
+  };
+}
+
+function toPullRequestState(state: string): PullRequestMetadata["state"] {
+  if (state === "open") {
+    return "OPEN";
+  }
+  if (state === "closed") {
+    return "CLOSED";
+  }
+  throw new Error(`GitHub returned an unsupported pull request state: ${state}`);
+}
+
 function toChangedFile(value: unknown): ChangedFile {
   if (!isRecord(value)) {
     throw new Error("GitHub changed-files response contains an invalid file.");
@@ -189,6 +246,46 @@ function readInteger(source: Record<string, unknown>, key: string): number {
     throw new Error(`GitHub API response has invalid numeric field "${key}".`);
   }
 
+  return value;
+}
+
+function readOptionalInteger(source: Record<string, unknown>, key: string): number | undefined {
+  const value = source[key];
+  if (value === undefined || value === null) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isSafeInteger(value)) {
+    throw new Error(`GitHub API response has invalid numeric field "${key}".`);
+  }
+  return value;
+}
+
+function readDate(source: Record<string, unknown>, key: string): Date {
+  const value = readOptionalString(source, key);
+  if (value === undefined) {
+    throw new Error(`GitHub API response is missing string field "${key}".`);
+  }
+  return toDate(value, key);
+}
+
+function readOptionalDate(source: Record<string, unknown>, key: string): Date | null {
+  const value = readOptionalString(source, key);
+  return value === undefined ? null : toDate(value, key);
+}
+
+function toDate(value: string, key: string): Date {
+  const date = new Date(value);
+  if (Number.isNaN(date.valueOf())) {
+    throw new Error(`GitHub API response has invalid date field "${key}".`);
+  }
+  return date;
+}
+
+function readObject(source: Record<string, unknown>, key: string): Record<string, unknown> {
+  const value = source[key];
+  if (!isRecord(value)) {
+    throw new Error(`GitHub API response is missing object field "${key}".`);
+  }
   return value;
 }
 

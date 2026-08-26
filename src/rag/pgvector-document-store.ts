@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import { InvalidVectorError } from "./errors.js";
 import type {
@@ -49,6 +49,28 @@ export class PgVectorRepositoryDocumentStore implements RepositoryDocumentStore 
           AND "contentSha" <> ${document.contentSha}
       `;
     });
+  }
+
+  async completeSnapshot(scope: {
+    branch: string;
+    paths: string[];
+    repositoryId: string;
+  }): Promise<void> {
+    if (scope.paths.length === 0) {
+      await this.prisma.$executeRaw`
+        DELETE FROM "RepositoryDocument"
+        WHERE "repositoryId" = ${scope.repositoryId}
+          AND "branch" = ${scope.branch}
+      `;
+      return;
+    }
+
+    await this.prisma.$executeRaw`
+      DELETE FROM "RepositoryDocument"
+      WHERE "repositoryId" = ${scope.repositoryId}
+        AND "branch" = ${scope.branch}
+        AND "path" NOT IN (${Prisma.join(scope.paths)})
+    `;
   }
 
   async search(query: RepositoryDocumentSearch): Promise<RetrievedRepositoryChunk[]> {

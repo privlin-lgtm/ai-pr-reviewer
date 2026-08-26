@@ -1,6 +1,11 @@
 import { App } from "@octokit/app";
 
-import { DocumentExtractionError } from "./errors.js";
+import {
+  DocumentExtractionError,
+  RepositoryDocumentLimitError,
+  RepositoryDocumentSizeLimitError,
+  RepositoryTreeTruncatedError,
+} from "./errors.js";
 import { selectIndexablePaths } from "./document-paths.js";
 import { retryTransient, type RetryOptions } from "../github/retry.js";
 import type {
@@ -12,7 +17,7 @@ import type {
 export class OctokitRepositoryStandardsSource implements RepositoryStandardsSource {
   constructor(
     private readonly app: App,
-    private readonly retryOptions: RetryOptions = {},
+    private readonly options: RepositoryStandardsSourceOptions = {},
   ) {}
 
   async listDocuments(target: RepositoryStandardsTarget): Promise<RepositoryDocumentSource[]> {
@@ -24,11 +29,18 @@ export class OctokitRepositoryStandardsSource implements RepositoryStandardsSour
         tree_sha: target.branch,
         recursive: "1",
       }),
-    this.retryOptions);
+    this.options.retryOptions);
 
     const paths = selectIndexablePaths(extractBlobPaths(readResponseData(treeResponse)));
-    return Promise.all(
-      paths.map(async (path) => {
+    const maxDocuments = this.options.maxDocuments ?? 200;
+    if (paths.length > maxDocuments) {
+      throw new RepositoryDocumentLimitError(maxDocuments);
+    }
+
+    return mapWithConcurrency(
+      paths,
+      this.options.concurrency ?? 8,
+      async (path) => {
         const response = await retryTransient(() =>
           octokit.request("GET /repos/{owner}/{repo}/contents/{path}", {
             owner: target.owner,
@@ -36,10 +48,14 @@ export class OctokitRepositoryStandardsSource implements RepositoryStandardsSour
             path,
             ref: target.branch,
           }),
-        this.retryOptions);
+        this.options.retryOptions);
 
-        return decodeRepositoryDocument(path, readResponseData(response));
-      }),
+        return decodeRepositoryDocument(
+          path,
+          readResponseData(response),
+          this.options.maxDocumentBytes ?? 262_144,
+        );
+      },
     );
   }
 }
@@ -47,6 +63,9 @@ export class OctokitRepositoryStandardsSource implements RepositoryStandardsSour
 function extractBlobPaths(data: unknown): string[] {
   if (!isRecord(data) || !Array.isArray(data["tree"])) {
     throw new Error("GitHub tree response is invalid.");
+  }
+  if (data["truncated"] === true) {
+    throw new RepositoryTreeTruncatedError();
   }
 
   return data["tree"].flatMap((entry) => {
@@ -58,7 +77,11 @@ function extractBlobPaths(data: unknown): string[] {
   });
 }
 
-function decodeRepositoryDocument(path: string, data: unknown): RepositoryDocumentSource {
+function decodeRepositoryDocument(
+  path: string,
+  data: unknown,
+  maximumBytes: number,
+): RepositoryDocumentSource {
   if (!isRecord(data)) {
     throw new DocumentExtractionError(path, "GitHub contents response is invalid.");
   }
@@ -70,11 +93,46 @@ function decodeRepositoryDocument(path: string, data: unknown): RepositoryDocume
     throw new DocumentExtractionError(path, "GitHub did not return a base64 text document.");
   }
 
+  const decoded = Buffer.from(content.replace(/\n/g, ""), "base64");
+  if (decoded.byteLength > maximumBytes) {
+    throw new RepositoryDocumentSizeLimitError(path, maximumBytes);
+  }
+
   return {
-    content: Buffer.from(content.replace(/\n/g, ""), "base64").toString("utf8"),
+    content: decoded.toString("utf8"),
     path,
     sha,
   };
+}
+
+export interface RepositoryStandardsSourceOptions {
+  concurrency?: number;
+  maxDocumentBytes?: number;
+  maxDocuments?: number;
+  retryOptions?: RetryOptions;
+}
+
+export async function mapWithConcurrency<T, TResult>(
+  values: T[],
+  concurrency: number,
+  mapper: (value: T) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (!Number.isInteger(concurrency) || concurrency < 1) {
+    throw new RangeError("concurrency must be a positive integer.");
+  }
+
+  const results: TResult[] = new Array(values.length);
+  let nextIndex = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (nextIndex < values.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(values[index]!);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 function readResponseData(response: unknown): unknown {

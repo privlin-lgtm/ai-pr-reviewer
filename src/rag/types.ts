@@ -38,6 +38,11 @@ export interface RepositoryDocumentSearch {
 }
 
 export interface RepositoryDocumentStore {
+  completeSnapshot(scope: {
+    branch: string;
+    paths: string[];
+    repositoryId: string;
+  }): Promise<void>;
   replaceDocument(document: EmbeddedRepositoryDocument): Promise<void>;
   search(query: RepositoryDocumentSearch): Promise<RetrievedRepositoryChunk[]>;
 }

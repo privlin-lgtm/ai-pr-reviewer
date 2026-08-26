@@ -9,8 +9,11 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "start": "next start",
+    "worker": "tsc -p tsconfig.test.json && node dist/reviews/worker-main.js",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "tsc -p tsconfig.test.json && node --test dist/ai/ai-review-engine.test.js dist/github/retry.test.js dist/github/webhook-handler.test.js dist/rag/chunker.test.js dist/rag/document-paths.test.js dist/rag/review-context-provider.test.js dist/risk/pull-request-risk-scorer.test.js"
+    "test": "npm run test:node && npm run test:vitest",
+    "test:node": "tsc -p tsconfig.test.json && node --test dist/ai/ai-review-engine.test.js dist/dashboard/dashboard-query.test.js dist/github/retry.test.js dist/github/webhook-handler.test.js dist/rag/chunker.test.js dist/rag/document-paths.test.js dist/rag/repository-standards-indexer.test.js dist/rag/review-context-provider.test.js dist/risk/pull-request-risk-scorer.test.js dist/reviews/prisma-review-job-handler.test.js dist/reviews/prisma-review-job-store.test.js dist/reviews/review-job-queue.test.js dist/reviews/review-job-worker.test.js",
+    "test:vitest": "vitest run"
   },
   "dependencies": {
     "@octokit/app": "^16.1.4",
@@ -26,15 +29,16 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.15.6",
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
-    "@tailwindcss/postcss": "^4.3.3",
     "dotenv": "^17.2.3",
     "postcss": "^8.5.6",
     "prisma": "^7.10.0",
     "tailwindcss": "^4.3.3",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   }
 }

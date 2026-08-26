@@ -52,6 +52,19 @@ enum DiffSide {
   RIGHT
 }
 
+enum ReviewJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum WebhookDeliveryStatus {
+  RECEIVED
+  ENQUEUED
+  FAILED
+}
+
 model User {
   id           String   @id @default(cuid())
   githubUserId BigInt   @unique
@@ -239,4 +252,43 @@ model ReviewMetrics {
   updatedAt              DateTime @updatedAt
 
   review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+}
+
+model WebhookDelivery {
+  id               String                @id @default(cuid())
+  githubDeliveryId String                @unique
+  eventName        String
+  action           String?
+  payloadHash      String
+  status           WebhookDeliveryStatus @default(RECEIVED)
+  reviewJobId      String?
+  receivedAt       DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  reviewJob ReviewJob? @relation(fields: [reviewJobId], references: [id], onDelete: SetNull)
+
+  @@index([reviewJobId])
+}
+
+model ReviewJob {
+  id                    String          @id @default(cuid())
+  installationGithubId  BigInt
+  repositoryGithubId    BigInt
+  owner                 String
+  repositoryName        String
+  pullRequestNumber     Int
+  headSha               String
+  status                ReviewJobStatus @default(QUEUED)
+  attempts              Int             @default(0)
+  runAfter              DateTime        @default(now())
+  lockedAt              DateTime?
+  lockedBy              String?
+  lastError             String?         @db.Text
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  deliveries WebhookDelivery[]
+
+  @@unique([repositoryGithubId, pullRequestNumber, headSha])
+  @@index([status, runAfter])
 }

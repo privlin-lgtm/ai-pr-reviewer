@@ -46,6 +46,24 @@ export interface PullRequestDiff extends PullRequestTarget {
   content: string;
 }
 
+export interface PullRequestMetadata extends PullRequestTarget {
+  authorGithubLogin: string;
+  authorGithubUserId: number | null;
+  baseRef: string;
+  baseSha: string;
+  body: string | null;
+  closedAt: Date | null;
+  createdAt: Date;
+  githubPullRequestId: number;
+  headRef: string;
+  headSha: string;
+  isDraft: boolean;
+  mergedAt: Date | null;
+  state: "OPEN" | "CLOSED" | "MERGED";
+  title: string;
+  updatedAt: Date;
+}
+
 export interface ChangedFile {
   additions: number;
   deletions: number;
@@ -78,6 +96,7 @@ export interface PublishedReview {
 
 export interface GitHubPullRequestService {
   fetchDiff(target: PullRequestTarget): Promise<PullRequestDiff>;
+  fetchMetadata(target: PullRequestTarget): Promise<PullRequestMetadata>;
   listChangedFiles(target: PullRequestTarget, maximumFiles?: number): Promise<ChangedFile[]>;
   publishReview(submission: ReviewSubmission): Promise<PublishedReview>;
 }

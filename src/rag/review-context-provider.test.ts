@@ -27,6 +27,10 @@ class StubEmbeddingModel implements EmbeddingModel {
 class RecordingDocumentStore implements RepositoryDocumentStore {
   query?: RepositoryDocumentSearch;
 
+  async completeSnapshot(): Promise<void> {
+    throw new Error("Not used by retrieval tests.");
+  }
+
   async replaceDocument(): Promise<void> {
     throw new Error("Not used by retrieval tests.");
   }

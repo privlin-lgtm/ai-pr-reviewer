@@ -95,6 +95,18 @@ The HTTP adapter must pass the unmodified body and normalized GitHub headers to 
 
 The connection URL is intentionally outside `schema.prisma` for Prisma 7 compatibility. Keep it in the deployment secret manager or an ignored local `.env` file; do not expose it to browser code.
 
+### Running the review worker
+
+Run Prisma migrations before starting a worker, then start the standalone process with:
+
+```sh
+npm run worker
+```
+
+The worker requires `DATABASE_URL`, all three GitHub App variables above, and `OPENAI_API_KEY`. It also honors `OPENAI_REVIEW_MODEL`, `OPENAI_EMBEDDING_MODEL`, and `RAG_RETRIEVAL_LIMIT`. `REVIEW_WORKER_ID` optionally supplies a stable worker identity; otherwise the hostname and process ID are used. `REVIEW_WORKER_POLL_MS` controls the idle poll delay and must be a positive integer (default `1000`).
+
+Each iteration claims one due `ReviewJob` with `FOR UPDATE SKIP LOCKED`, pins analysis to the webhook head SHA, and fetches PR metadata, diff, and changed files through the installation-scoped GitHub service. A superseded head is cancelled without AI work. The handler upserts the installation, repository, PR, review, findings, and metrics; it only publishes a GitHub review when that persisted revision has no GitHub review ID. Failed attempts return to `QUEUED` with exponential backoff, and become `FAILED` after three attempts. SIGINT and SIGTERM stop polling and disconnect Prisma after the active iteration finishes.
+
 ### Dashboard development
 
 The App Router dashboard is served by `npm run dev` and built with `npm run build`. It loads metrics, categories, and review history in a Server Component through `src/dashboard/data.ts`; Recharts is isolated to a client chart component. Configure `DATABASE_URL` and apply the Prisma migration before viewing live metrics. In development, a missing or unavailable database is shown as an explicit dashboard notice rather than replaced with fabricated values.

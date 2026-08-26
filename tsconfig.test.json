@@ -6,9 +6,9 @@
     "rootDir": "src",
     "declaration": false,
     "sourceMap": false,
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext"
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules", "dist", "app", "components", "src/dashboard"]
+  "exclude": ["node_modules", "dist", "app", "components", "src/dashboard/data.ts"]
 }
