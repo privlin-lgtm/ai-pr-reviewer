@@ -8,14 +8,16 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "npm run build && node --test dist/github/retry.test.js dist/github/webhook-handler.test.js"
+    "test": "npm run build && node --test dist/ai/ai-review-engine.test.js dist/github/retry.test.js dist/github/webhook-handler.test.js"
   },
   "dependencies": {
     "@octokit/app": "^16.1.4",
     "@octokit/webhooks": "^14.2.0",
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
-    "pg": "^8.23.0"
+    "openai": "^7.5.0",
+    "pg": "^8.23.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

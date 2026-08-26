@@ -80,6 +80,15 @@ The HTTP adapter must pass the unmodified body and normalized GitHub headers to 
 
 The connection URL is intentionally outside `schema.prisma` for Prisma 7 compatibility. Keep it in the deployment secret manager or an ignored local `.env` file; do not expose it to browser code.
 
+### AI review configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `OPENAI_API_KEY` | Server-only API key used by the OpenAI review adapter. |
+| `OPENAI_REVIEW_MODEL` | Optional model override for reviews; the integration defaults to `gpt-4.1-mini`. |
+
+`AIReviewEngine` accepts a bounded diff and optional repository standards, requests JSON-only review output, validates it with Zod, and maps each finding to the existing Prisma `Finding` fields. The review worker remains responsible for persisting results, assigning a `Review`, and publishing approved comments.
+
 ## Pull-request flow
 
 1. GitHub sends a `pull_request` webhook for `opened`, `reopened`, or `synchronize`. The webhook route reads the unmodified body, verifies `X-Hub-Signature-256`, and rejects invalid requests before JSON parsing.
