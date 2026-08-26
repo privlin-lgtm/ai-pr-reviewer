@@ -77,7 +77,7 @@ export function assembleRetrievedStandards(
   let usedCharacters = 0;
 
   for (const chunk of chunks) {
-    const block = `[Repository standard: ${chunk.path} (chunk ${chunk.chunkIndex}, ${chunk.contentSha})]\n${chunk.content}`;
+    const block = `[standard:${chunk.path}#${chunk.chunkIndex}@${chunk.contentSha}]\n${chunk.content}`;
     const remaining = maximumCharacters - usedCharacters;
     if (remaining <= 0) {
       break;

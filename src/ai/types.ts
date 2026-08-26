@@ -15,20 +15,39 @@ export const FindingSeveritySchema = z.enum([
   "INFO",
 ]);
 
+export const StandardViolationAreaSchema = z.enum([
+  "CODING",
+  "ARCHITECTURE",
+  "SECURITY",
+  "DATA_ACCESS",
+]);
+
+export const StandardSnippetReferenceSchema = z
+  .string()
+  .regex(/^\[standard:[^\]\r\n]+\]$/, "Expected a retrieved standard snippet reference.");
+
+export const StandardViolationSchema = z
+  .object({
+    areas: z.array(StandardViolationAreaSchema).min(1).max(4),
+    references: z.array(StandardSnippetReferenceSchema).min(1).max(10),
+  })
+  .strict();
+
 const DiffSideSchema = z.enum(["LEFT", "RIGHT"]).nullable();
 const LineNumberSchema = z.number().int().positive().nullable();
 
 export const AIReviewFindingSchema = z
   .object({
-    category: FindingCategorySchema,
-    confidence: z.number().min(0).max(1),
-    endLine: LineNumberSchema,
-    path: z.string().min(1),
-    rationale: z.string().min(1),
+    category: FindingCategorySchema.default("MAINTAINABILITY"),
+    confidence: z.number().min(0).max(1).default(0.5),
+    endLine: LineNumberSchema.default(null),
+    path: z.string().min(1).default("<repository>"),
+    rationale: z.string().min(1).default("No rationale was supplied."),
     recommendation: z.string().min(1),
     severity: FindingSeveritySchema,
-    side: DiffSideSchema,
-    startLine: LineNumberSchema,
+    side: DiffSideSchema.default(null),
+    startLine: LineNumberSchema.default(null),
+    standardViolation: StandardViolationSchema.nullable().default(null),
     title: z.string().min(1),
   })
   .strict()
@@ -79,6 +98,8 @@ export const AIReviewResponseSchema = z
 
 export type FindingCategory = z.infer<typeof FindingCategorySchema>;
 export type FindingSeverity = z.infer<typeof FindingSeveritySchema>;
+export type StandardViolationArea = z.infer<typeof StandardViolationAreaSchema>;
+export type StandardViolation = z.infer<typeof StandardViolationSchema>;
 export type AIReviewFinding = z.infer<typeof AIReviewFindingSchema>;
 export type AIReviewRecommendation = z.infer<typeof AIReviewRecommendationSchema>;
 export type AIReviewResult = z.infer<typeof AIReviewResponseSchema>;
@@ -118,6 +139,7 @@ export interface PrismaFindingDraft {
   endLine: number | null;
   evidence: {
     source: "openai";
+    standardViolation?: StandardViolation;
   };
   path: string;
   rationale: string;
@@ -134,7 +156,13 @@ export function toPrismaFindingDraft(finding: AIReviewFinding): PrismaFindingDra
     category: finding.category,
     confidence: finding.confidence,
     endLine: finding.endLine,
-    evidence: { source: "openai" },
+    evidence:
+      finding.standardViolation === null
+        ? { source: "openai" }
+        : {
+            source: "openai",
+            standardViolation: finding.standardViolation,
+          },
     path: finding.path,
     rationale: finding.rationale,
     severity: finding.severity,

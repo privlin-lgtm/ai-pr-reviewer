@@ -78,7 +78,7 @@ test("embeds a bounded review query and scopes retrieval to repository, branch, 
   });
   assert.match(embeddingModel.queries[0]!, /Pull request: #42/);
   assert.deepEqual(standards, [
-    "[Repository standard: docs/security.md (chunk 2, content-sha)]\nAlways validate webhook signatures.",
+    "[standard:docs/security.md#2@content-sha]\nAlways validate webhook signatures.",
   ]);
   assert.equal(toVectorLiteral([0.1, 0.2]), "[0.1,0.2]");
   assert.match(PGVECTOR_RETRIEVAL_QUERY_DESCRIPTION, /repositoryId/);

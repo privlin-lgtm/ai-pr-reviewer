@@ -16,6 +16,9 @@ export {
   AIReviewResponseSchema,
   FindingCategorySchema,
   FindingSeveritySchema,
+  StandardSnippetReferenceSchema,
+  StandardViolationAreaSchema,
+  StandardViolationSchema,
   toPrismaFindingDraft,
   type AIReviewFinding,
   type AIReviewContextProvider,
@@ -25,4 +28,6 @@ export {
   type PrismaFindingDraft,
   type StructuredReviewModel,
   type StructuredReviewModelRequest,
+  type StandardViolation,
+  type StandardViolationArea,
 } from "./types.js";

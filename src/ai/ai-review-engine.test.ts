@@ -9,6 +9,7 @@ import {
   OpenAIReviewRequestError,
 } from "./errors.js";
 import {
+  AIReviewFindingSchema,
   toPrismaFindingDraft,
   type AIReviewContextProvider,
   type StructuredReviewModel,
@@ -124,7 +125,67 @@ test("injects retrieved repository standards into the review prompt", async () =
 
   await engine.analyzeDiff(request);
 
-  assert.match(model.requests[0]!.userPrompt, /Verify signatures before parsing/);
+  assert.match(
+    model.requests[0]!.systemPrompt,
+    /coding, architecture, security, and data-access rules/,
+  );
+  assert.match(model.requests[0]!.systemPrompt, /standardViolation\.references/);
+  assert.match(
+    model.requests[0]!.userPrompt,
+    /\[Repository standard: docs\/security\.md\]\nVerify signatures before parsing/,
+  );
+});
+
+test("requires traceable snippets for repository-standard violations", () => {
+  const standardViolation = {
+    category: "MAINTAINABILITY",
+    confidence: 0.86,
+    endLine: 2,
+    path: "src/example.ts",
+    rationale: "The diff violates a layered architecture rule.",
+    recommendation: "Move persistence logic behind the repository boundary.",
+    severity: "MEDIUM",
+    side: "RIGHT",
+    startLine: 2,
+    standardViolation: {
+      areas: ["ARCHITECTURE"],
+      references: [],
+    },
+    title: "Layering violation",
+  };
+
+  assert.equal(AIReviewFindingSchema.safeParse(standardViolation).success, false);
+  assert.equal(
+    AIReviewFindingSchema.safeParse({
+      ...standardViolation,
+      standardViolation: {
+        areas: ["ARCHITECTURE"],
+        references: ["[standard:architecture/layers.md#1@sha123]"],
+      },
+    }).success,
+    true,
+  );
+});
+
+test("normalizes concise data-access standards findings into the platform shape", () => {
+  const result = AIReviewFindingSchema.safeParse({
+    severity: "HIGH",
+    title: "Restrict direct data access",
+    recommendation: "Use the approved data-access boundary.",
+    standardViolation: {
+      areas: ["DATA_ACCESS"],
+      references: ["[standard:architecture/data-access.md#3@sha456]"],
+    },
+  });
+
+  assert.equal(result.success, true);
+  if (!result.success) {
+    return;
+  }
+
+  assert.equal(result.data.category, "MAINTAINABILITY");
+  assert.equal(result.data.path, "<repository>");
+  assert.equal(result.data.standardViolation?.areas[0], "DATA_ACCESS");
 });
 
 test("rejects invalid structured responses and bounds diff input", async () => {
