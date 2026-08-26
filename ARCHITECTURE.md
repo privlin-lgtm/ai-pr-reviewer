@@ -72,6 +72,14 @@ The integration layer reads these deployment-managed environment variables only:
 
 The HTTP adapter must pass the unmodified body and normalized GitHub headers to `PullRequestWebhookHandler`. It verifies the signature before parsing, accepts only `pull_request.opened` and `pull_request.synchronize`, and hands accepted events to the durable job enqueuer. `OctokitPullRequestService` obtains a short-lived installation client per operation, retrieves diffs/files, publishes reviews, and retries only transport failures, `408`, `429`, and `5xx` responses with bounded exponential backoff.
 
+### Database configuration
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | PostgreSQL connection URL used by `prisma.config.ts` for Prisma Migrate and by `src/lib/prisma.ts` for the `PrismaPg` driver adapter. |
+
+The connection URL is intentionally outside `schema.prisma` for Prisma 7 compatibility. Keep it in the deployment secret manager or an ignored local `.env` file; do not expose it to browser code.
+
 ## Pull-request flow
 
 1. GitHub sends a `pull_request` webhook for `opened`, `reopened`, or `synchronize`. The webhook route reads the unmodified body, verifies `X-Hub-Signature-256`, and rejects invalid requests before JSON parsing.
