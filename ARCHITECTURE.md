@@ -60,6 +60,18 @@ worker/
 | Job runner | Claims jobs transactionally, retries transient failures with backoff, and records terminal failures. |
 | Dashboard/query service | Provides repository-scoped review history, findings, risk trends, and processing status. |
 
+### GitHub App configuration
+
+The integration layer reads these deployment-managed environment variables only:
+
+| Variable | Purpose |
+| --- | --- |
+| `GITHUB_APP_ID` | GitHub App identifier used to mint installation tokens. |
+| `GITHUB_APP_PRIVATE_KEY` | GitHub App private key; escaped newlines are normalized at runtime. |
+| `GITHUB_WEBHOOK_SECRET` | Shared secret used to verify `X-Hub-Signature-256` against the raw request body. |
+
+The HTTP adapter must pass the unmodified body and normalized GitHub headers to `PullRequestWebhookHandler`. It verifies the signature before parsing, accepts only `pull_request.opened` and `pull_request.synchronize`, and hands accepted events to the durable job enqueuer. `OctokitPullRequestService` obtains a short-lived installation client per operation, retrieves diffs/files, publishes reviews, and retries only transport failures, `408`, `429`, and `5xx` responses with bounded exponential backoff.
+
 ## Pull-request flow
 
 1. GitHub sends a `pull_request` webhook for `opened`, `reopened`, or `synchronize`. The webhook route reads the unmodified body, verifies `X-Hub-Signature-256`, and rejects invalid requests before JSON parsing.

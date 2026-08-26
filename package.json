@@ -1,0 +1,19 @@
+{
+  "name": "ai-pr-reviewer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --test dist/github/retry.test.js dist/github/webhook-handler.test.js"
+  },
+  "dependencies": {
+    "@octokit/app": "^16.1.4",
+    "@octokit/webhooks": "^14.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  }
+}
