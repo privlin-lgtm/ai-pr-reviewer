@@ -83,18 +83,32 @@ At review time, retrieval is constrained by `repository_id`, excludes stale/dele
 
 | Entity | Key fields and relations |
 | --- | --- |
-| `user` | Dashboard identity; has many `repository_memberships`. |
-| `github_installation` | GitHub installation ID, account metadata, encrypted configuration; has many repositories. |
-| `repository` | Installation, GitHub repository ID, owner/name, default branch, review settings; has many PRs, documents, and reviews. |
-| `pull_request` | Repository, GitHub PR number, base/head SHA, author, state; has many reviews. Unique on repository + PR number. |
-| `review` | Pull request, analyzed head SHA, status, model/version, score, summary, GitHub review ID; has many findings. Unique on pull request + head SHA. |
-| `review_finding` | Review, path, start/end line, side, severity, category, confidence, rationale, published comment ID. |
-| `risk_signal` | Review, signal name, score contribution, evidence JSON; supports score explainability. |
-| `repository_document` | Repository, path, branch, content SHA, chunk text, embedding vector, metadata. Unique on repository + path + branch + chunk index + SHA. |
-| `webhook_delivery` | GitHub delivery ID, event/action, received time, payload hash, processing state. Unique delivery ID enforces idempotency. |
-| `review_job` | Type, repository/PR/head SHA, status, attempts, run-after, locked-at/by, error. Unique active job identity prevents duplicate analysis. |
+| `User` | Dashboard identity linked to GitHub and authorized through repository memberships. |
+| `GitHubInstallation` | GitHub App installation/account identity; has many repositories and an optional installing user. |
+| `RepositoryMembership` | User-to-repository authorization with an explicit role. |
+| `Repository` | Installation, GitHub repository identity, default branch, and review configuration; has many pull requests. |
+| `PullRequest` | Repository, GitHub PR identity, author, branches, SHAs, and lifecycle state; has many reviews. |
+| `Review` | Pull request revision, processing status, trigger, risk score, model metadata, and GitHub review identity; has many findings. |
+| `Finding` | Review-local, deduplicated AI feedback with diff location, severity, confidence, evidence, and publication state. |
+| `ReviewMetrics` | One-to-one aggregate for OpenAI token use, cost, analysis scope, published-comment count, and duration. |
 
 Use PostgreSQL foreign keys, tenant-scoped indexes (especially `repository_id`), and `pgvector` for embeddings. Store only metadata and hashes for raw webhook bodies unless temporary payload retention is required for debugging.
+
+### Prisma schema index rationale
+
+`prisma/schema.prisma` keeps indexing intentionally small for an MVP while supporting the dashboard and worker's hot paths:
+
+| Index or constraint | Reason |
+| --- | --- |
+| Unique GitHub IDs on users, installations, repositories, PRs, reviews, and comments | Makes webhook/API upserts idempotent and prevents GitHub objects from being duplicated. |
+| `Repository.installationId` and `RepositoryMembership.repositoryId` | Supports resolving an installation webhook and checking repository membership; PostgreSQL does not automatically index foreign keys. |
+| Unique membership on user + repository | Enforces one authorization record per user/repository while efficiently listing a user's repositories. |
+| Pull request unique repository + number, plus repository + state + GitHub update time | Supports GitHub identity, active-PR filtering, and the default dashboard ordering without a table scan. |
+| Review unique PR + head SHA, plus PR + creation time and status + creation time | Avoids duplicate analysis of one revision, provides review history, and exposes queued/failed work efficiently. |
+| Finding unique review + fingerprint and review + status + severity | Suppresses duplicate AI findings and serves review-detail filtering without an additional index per column. |
+| One-to-one `ReviewMetrics.reviewId` | Keeps aggregate OpenAI usage and duration aligned with exactly one review without duplicating metrics rows. |
+
+Application validation must keep `Review.riskScore` in the `0–100` range and `Finding.confidence` in the `0.00–1.00` range. This leaves range rules close to the review/scoring logic while Prisma manages the relational constraints.
 
 ## API surface
 

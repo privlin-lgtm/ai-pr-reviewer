@@ -1,0 +1,221 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RepositoryRole {
+  OWNER
+  ADMIN
+  VIEWER
+}
+
+enum PullRequestState {
+  OPEN
+  CLOSED
+  MERGED
+}
+
+enum ReviewStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum ReviewTrigger {
+  WEBHOOK
+  MANUAL
+  RETRY
+}
+
+enum FindingSeverity {
+  CRITICAL
+  HIGH
+  MEDIUM
+  LOW
+  INFO
+}
+
+enum FindingStatus {
+  PENDING
+  PUBLISHED
+  SUPPRESSED
+  FAILED
+}
+
+enum DiffSide {
+  LEFT
+  RIGHT
+}
+
+model User {
+  id           String   @id @default(cuid())
+  githubUserId BigInt   @unique
+  githubLogin  String   @unique
+  email        String?  @unique
+  displayName  String?
+  avatarUrl    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  installedGitHubApps GitHubInstallation[] @relation("InstallationCreator")
+  repositoryMemberships RepositoryMembership[]
+}
+
+model GitHubInstallation {
+  id                   String   @id @default(cuid())
+  githubInstallationId BigInt   @unique
+  accountLogin         String
+  accountType          String
+  installedByUserId    String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  suspendedAt          DateTime?
+
+  installedByUser User?        @relation("InstallationCreator", fields: [installedByUserId], references: [id], onDelete: SetNull)
+  repositories    Repository[]
+
+  @@index([installedByUserId])
+}
+
+model Repository {
+  id                 String   @id @default(cuid())
+  installationId     String
+  githubRepositoryId BigInt   @unique
+  fullName           String   @unique
+  ownerLogin         String
+  name               String
+  defaultBranch      String
+  isEnabled          Boolean  @default(true)
+  isArchived         Boolean  @default(false)
+  reviewSettings     Json?
+  lastIndexedAt      DateTime?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  installation GitHubInstallation      @relation(fields: [installationId], references: [id], onDelete: Cascade)
+  memberships  RepositoryMembership[]
+  pullRequests PullRequest[]
+
+  @@index([installationId])
+}
+
+model RepositoryMembership {
+  id           String         @id @default(cuid())
+  userId       String
+  repositoryId String
+  role         RepositoryRole @default(VIEWER)
+  createdAt    DateTime       @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, repositoryId])
+  @@index([repositoryId])
+}
+
+model PullRequest {
+  id                  String           @id @default(cuid())
+  repositoryId        String
+  githubPullRequestId BigInt           @unique
+  number              Int
+  title               String
+  body                String?          @db.Text
+  authorGithubLogin   String
+  authorGithubUserId  BigInt?
+  state               PullRequestState @default(OPEN)
+  isDraft             Boolean          @default(false)
+  baseBranch          String
+  baseSha             String
+  headBranch          String
+  headSha             String
+  githubCreatedAt     DateTime
+  githubUpdatedAt     DateTime
+  mergedAt            DateTime?
+  closedAt            DateTime?
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+  reviews    Review[]
+
+  @@unique([repositoryId, number])
+  @@index([repositoryId, state, githubUpdatedAt])
+}
+
+model Review {
+  id             String        @id @default(cuid())
+  pullRequestId  String
+  githubReviewId BigInt?       @unique
+  headSha        String
+  status         ReviewStatus  @default(QUEUED)
+  trigger        ReviewTrigger @default(WEBHOOK)
+  riskScore      Int?
+  summary        String?       @db.Text
+  modelName      String?
+  promptVersion  String?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  failureReason  String?       @db.Text
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  pullRequest PullRequest    @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
+  findings    Finding[]
+  metrics     ReviewMetrics?
+
+  @@unique([pullRequestId, headSha])
+  @@index([pullRequestId, createdAt])
+  @@index([status, createdAt])
+}
+
+model Finding {
+  id                   String          @id @default(cuid())
+  reviewId             String
+  githubCommentId      BigInt?         @unique
+  fingerprint          String
+  path                 String
+  startLine            Int?
+  endLine              Int?
+  side                 DiffSide?
+  severity             FindingSeverity
+  category             String
+  confidence           Decimal         @db.Decimal(3, 2)
+  title                String
+  rationale            String          @db.Text
+  suggestedFix         String?         @db.Text
+  evidence             Json?
+  status               FindingStatus   @default(PENDING)
+  publishedAt          DateTime?
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, fingerprint])
+  @@index([reviewId, status, severity])
+}
+
+model ReviewMetrics {
+  id                     String   @id @default(cuid())
+  reviewId               String   @unique
+  inputTokens            Int      @default(0)
+  outputTokens           Int      @default(0)
+  embeddingInputTokens   Int      @default(0)
+  totalTokens            Int      @default(0)
+  estimatedCostUsd       Decimal  @default(0) @db.Decimal(12, 6)
+  modelCallCount         Int      @default(0)
+  filesChanged           Int      @default(0)
+  filesAnalyzed          Int      @default(0)
+  commentsPublished      Int      @default(0)
+  durationMs             Int?
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+}
