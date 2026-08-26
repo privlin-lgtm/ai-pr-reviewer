@@ -95,6 +95,10 @@ The HTTP adapter must pass the unmodified body and normalized GitHub headers to 
 
 The connection URL is intentionally outside `schema.prisma` for Prisma 7 compatibility. Keep it in the deployment secret manager or an ignored local `.env` file; do not expose it to browser code.
 
+### Dashboard development
+
+The App Router dashboard is served by `npm run dev` and built with `npm run build`. It loads metrics, categories, and review history in a Server Component through `src/dashboard/data.ts`; Recharts is isolated to a client chart component. Configure `DATABASE_URL` and apply the Prisma migration before viewing live metrics. In development, a missing or unavailable database is shown as an explicit dashboard notice rather than replaced with fabricated values.
+
 ### AI review configuration
 
 | Variable | Purpose |
