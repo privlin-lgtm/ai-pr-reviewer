@@ -99,9 +99,31 @@ model Repository {
 
   installation GitHubInstallation      @relation(fields: [installationId], references: [id], onDelete: Cascade)
   memberships  RepositoryMembership[]
+  documents    RepositoryDocument[]
   pullRequests PullRequest[]
 
   @@index([installationId])
+}
+
+model RepositoryDocument {
+  id                  String   @id @default(cuid())
+  repositoryId        String
+  path                String
+  branch              String
+  contentSha          String
+  chunkIndex          Int
+  content             String   @db.Text
+  embeddingModel      String
+  embeddingDimensions Int
+  embedding           Unsupported("vector(1536)")
+  metadata            Json?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, path, branch, contentSha, chunkIndex])
+  @@index([repositoryId, branch, path])
 }
 
 model RepositoryMembership {

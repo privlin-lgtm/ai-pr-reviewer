@@ -19,6 +19,13 @@ export class InvalidAIReviewInputError extends AIReviewEngineError {
   }
 }
 
+export class AIReviewContextError extends AIReviewEngineError {
+  constructor(options?: ErrorOptions) {
+    super("Repository context retrieval failed.", options);
+    this.name = "AIReviewContextError";
+  }
+}
+
 export class InvalidAIReviewResponseError extends AIReviewEngineError {
   constructor(message: string, options?: ErrorOptions) {
     super(message, options);

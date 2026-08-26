@@ -2,6 +2,7 @@ import { retryTransient, type RetryOptions } from "../github/retry.js";
 
 import {
   AIReviewEngineError,
+  AIReviewContextError,
   DiffTooLargeError,
   InvalidAIReviewInputError,
   InvalidAIReviewResponseError,
@@ -12,6 +13,7 @@ import {
   type AIReviewResult,
   type AnalyzeDiffRequest,
   type StructuredReviewModel,
+  type AIReviewContextProvider,
 } from "./types.js";
 
 const DEFAULT_MAXIMUM_DIFF_CHARACTERS = 60_000;
@@ -20,6 +22,7 @@ export interface AIReviewEngineOptions {
   maximumDiffCharacters?: number;
   model: string;
   retryOptions?: RetryOptions;
+  contextProvider?: AIReviewContextProvider;
 }
 
 export class AIReviewEngine {
@@ -52,8 +55,38 @@ export class AIReviewEngine {
       throw new DiffTooLargeError(this.maximumDiffCharacters);
     }
 
-    const rawResponse = await this.requestCompletion(request);
+    const enrichedRequest = await this.addRetrievedStandards(request);
+    const rawResponse = await this.requestCompletion(enrichedRequest);
     return parseReviewResponse(rawResponse);
+  }
+
+  private async addRetrievedStandards(
+    request: AnalyzeDiffRequest,
+  ): Promise<AnalyzeDiffRequest> {
+    if (this.options.contextProvider === undefined) {
+      return request;
+    }
+
+    try {
+      const retrievedStandards = await this.options.contextProvider.getStandards(request);
+      if (retrievedStandards.length === 0) {
+        return request;
+      }
+
+      return {
+        ...request,
+        repositoryStandards: [
+          ...(request.repositoryStandards ?? []),
+          ...retrievedStandards,
+        ],
+      };
+    } catch (error) {
+      if (error instanceof AIReviewEngineError) {
+        throw error;
+      }
+
+      throw new AIReviewContextError({ cause: error });
+    }
   }
 
   private async requestCompletion(request: AnalyzeDiffRequest): Promise<string> {

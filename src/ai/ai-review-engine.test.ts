@@ -8,15 +8,22 @@ import {
   InvalidAIReviewResponseError,
   OpenAIReviewRequestError,
 } from "./errors.js";
-import { toPrismaFindingDraft, type StructuredReviewModel } from "./types.js";
+import {
+  toPrismaFindingDraft,
+  type AIReviewContextProvider,
+  type StructuredReviewModel,
+  type StructuredReviewModelRequest,
+} from "./types.js";
 
 class StubReviewModel implements StructuredReviewModel {
   calls = 0;
+  requests: StructuredReviewModelRequest[] = [];
 
   constructor(private readonly responses: Array<string | unknown>) {}
 
-  async complete(): Promise<string> {
+  async complete(request: StructuredReviewModelRequest): Promise<string> {
     this.calls += 1;
+    this.requests.push(request);
     const response = this.responses.shift();
     if (typeof response === "string") {
       return response;
@@ -101,6 +108,23 @@ test("retries transient OpenAI failures with bounded injected delays", async () 
 
   assert.equal(model.calls, 2);
   assert.deepEqual(delays, [250]);
+});
+
+test("injects retrieved repository standards into the review prompt", async () => {
+  const model = new StubReviewModel([validResponse]);
+  const contextProvider: AIReviewContextProvider = {
+    async getStandards() {
+      return ["[Repository standard: docs/security.md]\nVerify signatures before parsing."];
+    },
+  };
+  const engine = new AIReviewEngine(model, {
+    contextProvider,
+    model: "test-model",
+  });
+
+  await engine.analyzeDiff(request);
+
+  assert.match(model.requests[0]!.userPrompt, /Verify signatures before parsing/);
 });
 
 test("rejects invalid structured responses and bounds diff input", async () => {

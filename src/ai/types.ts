@@ -91,6 +91,10 @@ export interface AnalyzeDiffRequest {
     number: number;
     repository: string;
   };
+  ragContext?: {
+    branch: string;
+    repositoryId: string;
+  };
   repositoryStandards?: string[];
 }
 
@@ -102,6 +106,10 @@ export interface StructuredReviewModelRequest {
 
 export interface StructuredReviewModel {
   complete(request: StructuredReviewModelRequest): Promise<string>;
+}
+
+export interface AIReviewContextProvider {
+  getStandards(request: AnalyzeDiffRequest): Promise<string[]>;
 }
 
 export interface PrismaFindingDraft {

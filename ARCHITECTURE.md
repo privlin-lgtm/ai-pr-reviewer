@@ -86,8 +86,16 @@ The connection URL is intentionally outside `schema.prisma` for Prisma 7 compati
 | --- | --- |
 | `OPENAI_API_KEY` | Server-only API key used by the OpenAI review adapter. |
 | `OPENAI_REVIEW_MODEL` | Optional model override for reviews; the integration defaults to `gpt-4.1-mini`. |
+| `OPENAI_EMBEDDING_MODEL` | Optional embedding-model override; it must produce the migration's fixed 1536 dimensions. |
+| `RAG_RETRIEVAL_LIMIT` | Optional positive cap on standards chunks injected into one review; defaults to `6`. |
 
-`AIReviewEngine` accepts a bounded diff and optional repository standards, requests JSON-only review output, validates it with Zod, and maps each finding to the existing Prisma `Finding` fields. The review worker remains responsible for persisting results, assigning a `Review`, and publishing approved comments.
+`AIReviewEngine` accepts a bounded diff and optional repository standards, requests JSON-only review output, validates it with Zod, and maps each finding to the existing Prisma `Finding` fields. `RagReviewContextProvider` can be injected into the engine to retrieve repository-specific standards before prompt construction. The review worker remains responsible for persisting results, assigning a `Review`, and publishing approved comments.
+
+### Repository standards RAG
+
+`RepositoryStandardsIndexer` retrieves and indexes only `README.md`, `CONTRIBUTING.md`, `docs/*`, and `architecture/*`. It normalizes text, creates overlapping chunks, batches OpenAI embeddings with bounded retry, and atomically upserts a version identified by repository, branch, path, content SHA, and chunk index. Reindexing removes stale SHA versions only after the replacement succeeds.
+
+The `RepositoryDocument` Prisma model declares its `vector(1536)` column as `Unsupported` to retain schema-drift awareness, while `prisma/migrations/20260826210000_init/migration.sql` creates the pgvector column and HNSW cosine index. `PgVectorRepositoryDocumentStore` uses parameterized Prisma raw queries because Prisma cannot natively materialize pgvector values. Retrieval always filters by repository ID, branch, and embedding model before cosine ordering, so standards cannot cross repository or embedding-version boundaries. The target PostgreSQL instance must permit `CREATE EXTENSION vector` and support pgvector HNSW indexes.
 
 ## Pull-request flow
 
@@ -116,6 +124,7 @@ At review time, retrieval is constrained by `repository_id`, excludes stale/dele
 | `GitHubInstallation` | GitHub App installation/account identity; has many repositories and an optional installing user. |
 | `RepositoryMembership` | User-to-repository authorization with an explicit role. |
 | `Repository` | Installation, GitHub repository identity, default branch, and review configuration; has many pull requests. |
+| `RepositoryDocument` | Versioned, repository/branch-scoped standards chunk metadata; raw pgvector embedding storage enables semantic retrieval. |
 | `PullRequest` | Repository, GitHub PR identity, author, branches, SHAs, and lifecycle state; has many reviews. |
 | `Review` | Pull request revision, processing status, trigger, risk score, model metadata, and GitHub review identity; has many findings. |
 | `Finding` | Review-local, deduplicated AI feedback with diff location, severity, confidence, evidence, and publication state. |

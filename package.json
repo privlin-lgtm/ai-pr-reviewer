@@ -8,7 +8,7 @@
     "prisma:generate": "prisma generate",
     "prisma:validate": "prisma validate",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "npm run build && node --test dist/ai/ai-review-engine.test.js dist/github/retry.test.js dist/github/webhook-handler.test.js"
+    "test": "npm run build && node --test dist/ai/ai-review-engine.test.js dist/github/retry.test.js dist/github/webhook-handler.test.js dist/rag/chunker.test.js dist/rag/document-paths.test.js dist/rag/review-context-provider.test.js"
   },
   "dependencies": {
     "@octokit/app": "^16.1.4",

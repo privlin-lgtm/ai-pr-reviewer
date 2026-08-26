@@ -3,6 +3,7 @@ export { createAIReviewEngine } from "./ai-review-service.js";
 export { loadAIReviewConfig, type AIReviewConfig } from "./config.js";
 export {
   AIReviewEngineError,
+  AIReviewContextError,
   DiffTooLargeError,
   InvalidAIReviewInputError,
   InvalidAIReviewResponseError,
@@ -17,6 +18,7 @@ export {
   FindingSeveritySchema,
   toPrismaFindingDraft,
   type AIReviewFinding,
+  type AIReviewContextProvider,
   type AIReviewRecommendation,
   type AIReviewResult,
   type AnalyzeDiffRequest,
