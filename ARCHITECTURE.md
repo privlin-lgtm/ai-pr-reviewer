@@ -56,9 +56,24 @@ worker/
 | Webhook ingestion | Verifies delivery authenticity, deduplicates it, stores a minimal event record, and enqueues work. |
 | Review orchestrator | Fetches the immutable PR head, selects changed files, builds context, calls AI, validates findings, and publishes feedback. |
 | RAG standards service | Indexes approved repository guidance, embeds chunks, and retrieves relevant standards per changed file. |
-| Risk scorer | Combines deterministic change signals with a constrained AI classification into an explainable `0–100` score. |
+| Risk scorer | Produces a deterministic, explainable `1–10` score from change and finding signals; it does not depend on AI. |
 | Job runner | Claims jobs transactionally, retries transient failures with backoff, and records terminal failures. |
 | Dashboard/query service | Provides repository-scoped review history, findings, risk trends, and processing status. |
+
+### Pull-request risk policy
+
+`PullRequestRiskScorer` starts every PR at `1` and clamps the final integer score to `1–10`. It returns all factor inputs, contributions, and human-readable reasons; persist `score` in `Review.riskScore` and use the category/breakdown for dashboard display.
+
+| Signal | Contribution |
+| --- | --- |
+| Files changed | `+1` at 6 files, `+2` at 16, `+3` at 41. |
+| Security findings | `+1` each, capped at 3 findings. |
+| Authentication change | `+2`. |
+| Database migration | `+2`. |
+| Public API change | `+1`. |
+| High-severity issues | `+2` each, capped at 2 issues. |
+
+Categories are `LOW` (1–3), `MEDIUM` (4–6), `HIGH` (7–8), and `CRITICAL` (9–10). The policy constants are exported from the service so thresholds can be reviewed or changed deliberately.
 
 ### GitHub App configuration
 
