@@ -19,7 +19,7 @@ export function ReviewHistory({ history }: Readonly<{ history: DashboardReviewHi
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[760px] text-left text-sm">
+      <table className="w-full min-w-[580px] text-left text-sm">
         <caption className="sr-only">Recent pull request review history</caption>
         <thead className="border-b border-slate-800 text-xs uppercase tracking-wide text-slate-500">
           <tr>

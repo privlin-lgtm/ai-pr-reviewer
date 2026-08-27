@@ -2,6 +2,14 @@
 
 A GitHub App-backed pull-request reviewer with durable PostgreSQL work queues, validated AI findings, pgvector standards retrieval, and a fail-closed dashboard.
 
+## Dashboard previews
+
+These screenshots use the explicit local demo mode. The sample is deterministic, in-memory, and does not access PostgreSQL or represent production data.
+
+![Desktop dashboard demo](docs/assets/dashboard-desktop-demo.png)
+
+![Mobile dashboard demo](docs/assets/dashboard-mobile-demo.png)
+
 ## Reliability model
 
 ```mermaid
@@ -126,6 +134,23 @@ npm run seed:demo
 ```
 
 The fixture creates no GitHub review or external side effect.
+
+### Local dashboard preview mode
+
+For local portfolio screenshots or UI exploration without a database or GitHub identity, enable the development-only demo mode:
+
+```bash
+DASHBOARD_DEMO_MODE=true npm run dev
+```
+
+In PowerShell:
+
+```powershell
+$env:DASHBOARD_DEMO_MODE = "true"
+npm run dev
+```
+
+The flag is honored only when `NODE_ENV=development`; it supplies a typed, deterministic in-memory dashboard view model. Without this explicit flag, the dashboard continues to fail closed when authentication or PostgreSQL is unavailable.
 
 ## Quality checks
 

@@ -20,10 +20,10 @@ export function CategoryChart({ categories }: Readonly<{ categories: DashboardCa
   return (
     <div className="h-72" role="img" aria-label="Bar chart of the most common issue categories">
       <ResponsiveContainer height="100%" width="100%">
-        <BarChart data={categories} layout="vertical" margin={{ left: 10, right: 24 }}>
+        <BarChart data={categories} layout="vertical" margin={{ left: 0, right: 24 }}>
           <CartesianGrid horizontal={false} stroke="#334155" />
           <XAxis allowDecimals={false} stroke="#94a3b8" type="number" />
-          <YAxis dataKey="category" stroke="#cbd5e1" type="category" width={116} />
+          <YAxis dataKey="category" stroke="#cbd5e1" type="category" width={144} />
           <Tooltip
             contentStyle={{
               background: "#0f172a",
@@ -32,7 +32,13 @@ export function CategoryChart({ categories }: Readonly<{ categories: DashboardCa
             }}
             cursor={{ fill: "#1e293b" }}
           />
-          <Bar dataKey="count" fill="#38bdf8" name="Findings" radius={[0, 6, 6, 0]} />
+          <Bar
+            dataKey="count"
+            fill="#38bdf8"
+            isAnimationActive={false}
+            name="Findings"
+            radius={[0, 6, 6, 0]}
+          />
         </BarChart>
       </ResponsiveContainer>
     </div>

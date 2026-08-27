@@ -7,7 +7,7 @@ import {
   readGitHubAppSessionValue,
   tryLoadGitHubAppIdentityConfig,
 } from "../src/auth/github-app-identity";
-import { loadDashboardData } from "../src/dashboard/data";
+import { isDashboardDemoMode, loadDashboardData } from "../src/dashboard/data";
 import {
   resolveDashboardScope,
   type DashboardIdentity,
@@ -17,14 +17,16 @@ import type { DashboardData } from "../src/dashboard/types";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const identity = await getDashboardIdentity();
+  const demoMode = isDashboardDemoMode();
   const databaseConfigured =
     process.env.DATABASE_URL !== undefined &&
     process.env.DATABASE_URL.trim().length > 0;
   const result =
-    !databaseConfigured
+    demoMode
+      ? await loadDashboardData(null)
+      : !databaseConfigured
       ? { status: "unconfigured" as const }
-      : await resolveAndLoadDashboardData(identity);
+      : await resolveAndLoadDashboardData(await getDashboardIdentity());
 
   return (
     <main className="mx-auto min-h-screen max-w-7xl p-6 lg:p-10">
@@ -32,12 +34,16 @@ export default async function DashboardPage() {
         <div>
           <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">AI PR Reviewer</p>
           <h1 className="mt-2 text-3xl font-semibold tracking-tight text-white">Review health dashboard</h1>
-          <p className="mt-2 max-w-2xl text-slate-400">
+          <p className="mt-2 max-w-2xl break-words text-slate-400">
             Pull request reviews, deterministic risk, and actionable findings across connected repositories.
           </p>
         </div>
-        <p className="text-sm text-slate-500">Server-rendered from PostgreSQL</p>
+        <p className="text-sm text-slate-500">
+          {result.status === "demo" ? "Local demo data" : "Server-rendered from PostgreSQL"}
+        </p>
       </header>
+
+      {result.status === "demo" ? <DemoModeNotice /> : null}
 
       {result.status === "unconfigured" ? (
         <DatabaseNotice
@@ -58,7 +64,9 @@ export default async function DashboardPage() {
         <DatabaseNotice title="Dashboard data is unavailable" message={result.message} />
       ) : null}
 
-      {result.status === "ready" ? <DashboardContent data={result.data} /> : null}
+      {result.status === "ready" || result.status === "demo" ? (
+        <DashboardContent data={result.data} />
+      ) : null}
     </main>
   );
 }
@@ -116,7 +124,10 @@ function DashboardContent({
       </section>
 
       <section className="mt-8 grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
-        <section aria-labelledby="categories-title" className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+        <section
+          aria-labelledby="categories-title"
+          className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/80 p-5"
+        >
           <div className="mb-5">
             <h2 id="categories-title" className="text-lg font-semibold text-white">Most common issue categories</h2>
             <p className="mt-1 text-sm text-slate-400">Top categories across all persisted findings.</p>
@@ -124,7 +135,10 @@ function DashboardContent({
           <CategoryChart categories={data.categories} />
         </section>
 
-        <section aria-labelledby="history-title" className="rounded-2xl border border-slate-800 bg-slate-900/80 p-5">
+        <section
+          aria-labelledby="history-title"
+          className="min-w-0 rounded-2xl border border-slate-800 bg-slate-900/80 p-5"
+        >
           <div className="mb-5">
             <h2 id="history-title" className="text-lg font-semibold text-white">Review history</h2>
             <p className="mt-1 text-sm text-slate-400">The 12 most recent pull request review runs.</p>
@@ -133,6 +147,22 @@ function DashboardContent({
         </section>
       </section>
     </>
+  );
+}
+
+function DemoModeNotice() {
+  return (
+    <section
+      aria-label="Local dashboard demo data"
+      className="mt-7 rounded-2xl border border-sky-400/40 bg-sky-950/25 p-5"
+    >
+      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">Local demo mode</p>
+      <p className="mt-2 break-words text-sm leading-6 text-slate-300">
+        This deterministic in-memory sample is shown only because
+        <code className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 text-sky-200">DASHBOARD_DEMO_MODE=true</code>
+        is enabled during development. It does not access PostgreSQL or represent production data.
+      </p>
+    </section>
   );
 }
 
