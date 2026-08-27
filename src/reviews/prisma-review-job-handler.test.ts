@@ -28,6 +28,7 @@ test("cancels a stale claimed head before analysis or persistence", async () => 
       title: "PR",
       updatedAt: new Date(),
     }),
+    findPublishedReviewByMarker: async () => null,
     listChangedFiles: async () => [],
     publishReview: async () => assert.fail("stale jobs must not publish"),
   };

@@ -15,6 +15,7 @@ export function createGitHubAppServices(
   });
 
   return {
+    app,
     pullRequests: new OctokitPullRequestService(app, retryOptions),
     signatureVerifier: new OctokitWebhookSignatureVerifier(config.webhookSecret),
   };

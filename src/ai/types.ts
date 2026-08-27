@@ -102,7 +102,22 @@ export type StandardViolationArea = z.infer<typeof StandardViolationAreaSchema>;
 export type StandardViolation = z.infer<typeof StandardViolationSchema>;
 export type AIReviewFinding = z.infer<typeof AIReviewFindingSchema>;
 export type AIReviewRecommendation = z.infer<typeof AIReviewRecommendationSchema>;
-export type AIReviewResult = z.infer<typeof AIReviewResponseSchema>;
+export interface RetrievedStandardSource {
+  chunkIndex: number;
+  contentSha: string;
+  path: string;
+  reference: string;
+  similarity: number;
+}
+
+export interface RetrievedStandardsContext {
+  snippets: string[];
+  sources: RetrievedStandardSource[];
+}
+
+export type AIReviewResult = z.infer<typeof AIReviewResponseSchema> & {
+  sourceProvenance?: RetrievedStandardSource[];
+};
 
 export interface AnalyzeDiffRequest {
   diff: string;
@@ -116,6 +131,7 @@ export interface AnalyzeDiffRequest {
     branch: string;
     repositoryId: string;
   };
+  ragSourceProvenance?: RetrievedStandardSource[];
   repositoryStandards?: string[];
 }
 
@@ -130,7 +146,9 @@ export interface StructuredReviewModel {
 }
 
 export interface AIReviewContextProvider {
-  getStandards(request: AnalyzeDiffRequest): Promise<string[]>;
+  getStandards(
+    request: AnalyzeDiffRequest,
+  ): Promise<RetrievedStandardsContext | string[]>;
 }
 
 export interface PrismaFindingDraft {
@@ -139,6 +157,7 @@ export interface PrismaFindingDraft {
   endLine: number | null;
   evidence: {
     source: "openai";
+    citedStandards?: RetrievedStandardSource[];
     standardViolation?: StandardViolation;
   };
   path: string;

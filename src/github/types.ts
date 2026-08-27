@@ -97,6 +97,10 @@ export interface PublishedReview {
 export interface GitHubPullRequestService {
   fetchDiff(target: PullRequestTarget): Promise<PullRequestDiff>;
   fetchMetadata(target: PullRequestTarget): Promise<PullRequestMetadata>;
+  findPublishedReviewByMarker(
+    target: PullRequestTarget,
+    marker: string,
+  ): Promise<PublishedReview | null>;
   listChangedFiles(target: PullRequestTarget, maximumFiles?: number): Promise<ChangedFile[]>;
   publishReview(submission: ReviewSubmission): Promise<PublishedReview>;
 }

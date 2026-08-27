@@ -1,4 +1,8 @@
-import type { AIReviewContextProvider, AnalyzeDiffRequest } from "../ai/types.js";
+import type {
+  AIReviewContextProvider,
+  AnalyzeDiffRequest,
+  RetrievedStandardSource,
+} from "../ai/types.js";
 import { retryTransient, type RetryOptions } from "../github/retry.js";
 
 import type {
@@ -33,9 +37,12 @@ export class RagReviewContextProvider implements AIReviewContextProvider {
       options.maximumQueryCharacters ?? DEFAULT_MAXIMUM_QUERY_CHARACTERS;
   }
 
-  async getStandards(request: AnalyzeDiffRequest): Promise<string[]> {
+  async getStandards(request: AnalyzeDiffRequest): Promise<{
+    snippets: string[];
+    sources: RetrievedStandardSource[];
+  }> {
     if (request.ragContext === undefined) {
-      return [];
+      return { snippets: [], sources: [] };
     }
 
     const [embedding] = await retryTransient(
@@ -54,7 +61,7 @@ export class RagReviewContextProvider implements AIReviewContextProvider {
       repositoryId: request.ragContext.repositoryId,
     });
 
-    return assembleRetrievedStandards(chunks, this.maximumContextCharacters);
+    return assembleRetrievedStandardsWithSources(chunks, this.maximumContextCharacters);
   }
 }
 
@@ -73,7 +80,15 @@ export function assembleRetrievedStandards(
   chunks: RetrievedRepositoryChunk[],
   maximumCharacters = DEFAULT_MAXIMUM_CONTEXT_CHARACTERS,
 ): string[] {
+  return assembleRetrievedStandardsWithSources(chunks, maximumCharacters).snippets;
+}
+
+export function assembleRetrievedStandardsWithSources(
+  chunks: RetrievedRepositoryChunk[],
+  maximumCharacters = DEFAULT_MAXIMUM_CONTEXT_CHARACTERS,
+): { snippets: string[]; sources: RetrievedStandardSource[] } {
   const context: string[] = [];
+  const sources: RetrievedStandardSource[] = [];
   let usedCharacters = 0;
 
   for (const chunk of chunks) {
@@ -84,8 +99,19 @@ export function assembleRetrievedStandards(
     }
 
     context.push(block.slice(0, remaining));
+    sources.push({
+      chunkIndex: chunk.chunkIndex,
+      contentSha: chunk.contentSha,
+      path: chunk.path,
+      reference: standardReference(chunk),
+      similarity: chunk.similarity,
+    });
     usedCharacters += Math.min(block.length, remaining);
   }
 
-  return context;
+  return { snippets: context, sources };
+}
+
+export function standardReference(chunk: Pick<RetrievedRepositoryChunk, "chunkIndex" | "contentSha" | "path">): string {
+  return `[standard:${chunk.path}#${chunk.chunkIndex}@${chunk.contentSha}]`;
 }

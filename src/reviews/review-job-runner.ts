@@ -1,13 +1,20 @@
 import { setTimeout as delay } from "node:timers/promises";
 
+import {
+  createStructuredLogger,
+  errorLogFields,
+  type StructuredLogger,
+} from "../observability/structured-logger.js";
 import { ReviewJobWorker } from "./review-job-worker.js";
 
 export interface ReviewJobRunnerOptions {
   idleDelayMilliseconds?: number;
+  logger?: StructuredLogger;
 }
 
 export class ReviewJobRunner {
   private readonly idleDelayMilliseconds: number;
+  private readonly logger: StructuredLogger;
   private stopping = false;
 
   constructor(
@@ -21,6 +28,9 @@ export class ReviewJobRunner {
     ) {
       throw new RangeError("idleDelayMilliseconds must be a positive integer.");
     }
+    this.logger =
+      options.logger ??
+      createStructuredLogger({ baseFields: { component: "review-job-runner" } });
   }
 
   stop(): void {
@@ -34,7 +44,7 @@ export class ReviewJobRunner {
           continue;
         }
       } catch (error) {
-        console.error("Review job worker iteration failed.", error);
+        this.logger.error("review_job_worker_iteration_failed", errorLogFields(error));
       }
       await delay(this.idleDelayMilliseconds);
     }

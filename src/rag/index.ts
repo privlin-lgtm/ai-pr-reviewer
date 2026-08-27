@@ -28,9 +28,29 @@ export {
   type RepositoryStandardsIndexerOptions,
 } from "./repository-standards-indexer.js";
 export {
+  RepositoryIndexQueue,
+  RepositoryNotFoundError,
+  type RepositoryIndexQueueResult,
+  type RepositoryIndexRequest,
+} from "./repository-index-queue.js";
+export {
+  PrismaRepositoryIndexJobStore,
+  type PrismaRepositoryIndexJobStoreOptions,
+} from "./prisma-repository-index-job-store.js";
+export {
+  RepositoryIndexWorker,
+  RepositoryStandardsIndexJobHandler,
+  type ClaimedRepositoryIndexJob,
+  type RepositoryIndexJobHandler,
+  type RepositoryIndexJobStore,
+  type RepositoryIndexWorkerOptions,
+} from "./repository-index-job.js";
+export {
   assembleRetrievedStandards,
+  assembleRetrievedStandardsWithSources,
   buildRetrievalQuery,
   RagReviewContextProvider,
+  standardReference,
   type ReviewContextProviderOptions,
 } from "./review-context-provider.js";
 export type {

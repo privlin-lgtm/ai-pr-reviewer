@@ -105,7 +105,7 @@ npm run worker
 
 The worker requires `DATABASE_URL`, all three GitHub App variables above, and `OPENAI_API_KEY`. It also honors `OPENAI_REVIEW_MODEL`, `OPENAI_EMBEDDING_MODEL`, and `RAG_RETRIEVAL_LIMIT`. `REVIEW_WORKER_ID` optionally supplies a stable worker identity; otherwise the hostname and process ID are used. `REVIEW_WORKER_POLL_MS` controls the idle poll delay and must be a positive integer (default `1000`).
 
-Each iteration claims one due `ReviewJob` with `FOR UPDATE SKIP LOCKED`, pins analysis to the webhook head SHA, and fetches PR metadata, diff, and changed files through the installation-scoped GitHub service. A superseded head is cancelled without AI work. The handler upserts the installation, repository, PR, review, findings, and metrics; it only publishes a GitHub review when that persisted revision has no GitHub review ID. Failed attempts return to `QUEUED` with exponential backoff, and become `FAILED` after three attempts. SIGINT and SIGTERM stop polling and disconnect Prisma after the active iteration finishes.
+Each iteration claims due `ReviewJob`, `PublicationOutbox`, and `RepositoryIndexJob` rows with `FOR UPDATE SKIP LOCKED`. Claims carry an expiring lease, heartbeat, ownership check, bounded exponential backoff, and terminal failure state. A superseded PR head is cancelled without AI work. Analysis persists the installation, repository, PR, review, findings, metrics, and a publication outbox record atomically; it does not call GitHub in that transaction. A dedicated publisher rechecks a stable hidden review marker before writing externally. This makes publication at-least-once: a narrow lookup/write crash race remains because GitHub does not offer a caller idempotency key. SIGINT and SIGTERM stop polling after the active iteration; `/healthz` and `/readyz` expose worker liveness and PostgreSQL readiness.
 
 ### Dashboard development
 
@@ -120,17 +120,17 @@ The App Router dashboard is served by `npm run dev` and built with `npm run buil
 | `OPENAI_EMBEDDING_MODEL` | Optional embedding-model override; it must produce the migration's fixed 1536 dimensions. |
 | `RAG_RETRIEVAL_LIMIT` | Optional positive cap on standards chunks injected into one review; defaults to `6`. |
 
-`AIReviewEngine` accepts a bounded diff and optional repository standards, requests JSON-only review output, validates it with Zod, and maps each finding to the existing Prisma `Finding` fields. `RagReviewContextProvider` can be injected into the engine to retrieve repository-specific standards before prompt construction. The review worker remains responsible for persisting results, assigning a `Review`, and publishing approved comments.
+`AIReviewEngine` accepts a bounded diff and optional repository standards, requests JSON-only review output, validates it with Zod, and maps each finding to the existing Prisma `Finding` fields. `RagReviewContextProvider` returns both prompt snippets and stable source references. The engine strips invented standard citations; persisted finding evidence contains only references that were actually retrieved. The review worker persists analysis and queues approved comments; the publication worker posts them later.
 
 ### Repository standards RAG
 
-`RepositoryStandardsIndexer` retrieves and indexes only `README.md`, `CONTRIBUTING.md`, `docs/*`, and `architecture/*`. It normalizes text, creates overlapping chunks, batches OpenAI embeddings with bounded retry, and atomically upserts a version identified by repository, branch, path, content SHA, and chunk index. Reindexing removes stale SHA versions only after the replacement succeeds.
+`RepositoryStandardsIndexer` retrieves and indexes only `README.md`, `CONTRIBUTING.md`, `docs/*`, and `architecture/*`. A durable `RepositoryIndexJob` tracks status, source branch, attempts, timing, model, counts, leases, and errors. It normalizes text, creates overlapping chunks, batches OpenAI embeddings with bounded retry, persists source path/SHA/chunk provenance, and removes stale SHA versions only after the replacement succeeds. Authorized users can request reindexing through `POST /api/repos/:repositoryId/index` or `npm run index:repository`.
 
 The `RepositoryDocument` Prisma model declares its `vector(1536)` column as `Unsupported` to retain schema-drift awareness, while `prisma/migrations/20260826210000_init/migration.sql` creates the pgvector column and HNSW cosine index. `PgVectorRepositoryDocumentStore` uses parameterized Prisma raw queries because Prisma cannot natively materialize pgvector values. Retrieval always filters by repository ID, branch, and embedding model before cosine ordering, so standards cannot cross repository or embedding-version boundaries. The target PostgreSQL instance must permit `CREATE EXTENSION vector` and support pgvector HNSW indexes.
 
 ## Pull-request flow
 
-1. GitHub sends a `pull_request` webhook for `opened`, `reopened`, or `synchronize`. The webhook route reads the unmodified body, verifies `X-Hub-Signature-256`, and rejects invalid requests before JSON parsing.
+1. GitHub sends a `pull_request` webhook for `opened` or `synchronize`. The webhook route enforces a raw-byte limit, verifies `X-Hub-Signature-256`, and rejects invalid requests before JSON parsing. A PostgreSQL window counter returns `429` with `Retry-After` for a valid but throttled installation.
 2. The route stores the GitHub delivery ID in `webhook_deliveries` under a unique constraint. A duplicate returns success without scheduling duplicate work.
 3. In one database transaction, it creates an `analyze_pr` `review_job` keyed by installation, repository, PR number, and head SHA. GitHub receives a fast `2xx`; no AI or GitHub API work occurs in the request.
 4. The worker locks one job with `FOR UPDATE SKIP LOCKED`, obtains an installation token, and fetches PR metadata, changed files, and the head SHA. If the PR changed, the stale job is cancelled and the newer webhook job wins.
@@ -138,7 +138,7 @@ The `RepositoryDocument` Prisma model declares its `vector(1536)` column as `Uns
 6. It retrieves matching standards chunks from `repository_documents` using pgvector, scoped strictly to the same repository and current default/head branch. Relevant `.github` guidance and configured documents are prioritized.
 7. OpenAI receives a structured prompt containing the diff, limited surrounding code, retrieved standards, and a JSON schema for findings. It must return only actionable findings with file, line, severity, category, rationale, and confidence.
 8. The worker rejects malformed, low-confidence, duplicate, out-of-diff, or unsupported-line findings. It calculates and stores the final risk score and contributing signals.
-9. The worker creates a GitHub App review with inline comments only for validated high-confidence findings; it otherwise posts a concise summary. The review, findings, and publishing outcome are persisted.
+9. The analysis transaction creates one `PublicationOutbox` record and associates only validated high-confidence findings with it. Low-confidence or unplaceable findings are `SUPPRESSED`. The publication worker posts the summary and eligible inline comments, then transitions only associated findings to `PUBLISHED`; terminal publication failure marks them `FAILED`.
 10. The dashboard reads persisted data only. It can show pending/failed states, score history, comments, and the standards sources used for each review.
 
 ## Repository-aware standards (RAG)
@@ -159,6 +159,8 @@ At review time, retrieval is constrained by `repository_id`, excludes stale/dele
 | `PullRequest` | Repository, GitHub PR identity, author, branches, SHAs, and lifecycle state; has many reviews. |
 | `Review` | Pull request revision, processing status, trigger, risk score, model metadata, and GitHub review identity; has many findings. |
 | `Finding` | Review-local, deduplicated AI feedback with diff location, severity, confidence, evidence, and publication state. |
+| `PublicationOutbox` | Durable GitHub review payload, stable idempotency marker, claims, attempts, lease, and external review identity. |
+| `RepositoryIndexJob` | Durable indexing lifecycle with source target, status, attempts, counts, leases, and errors. |
 | `ReviewMetrics` | One-to-one aggregate for OpenAI token use, cost, analysis scope, published-comment count, and duration. |
 
 Use PostgreSQL foreign keys, tenant-scoped indexes (especially `repository_id`), and `pgvector` for embeddings. Store only metadata and hashes for raw webhook bodies unless temporary payload retention is required for debugging.
@@ -184,7 +186,10 @@ Application validation must keep `Review.riskScore` in the `0–100` range and `
 | Endpoint | Purpose |
 | --- | --- |
 | `POST /api/github/webhook` | Public GitHub-only ingress; signature verified and rate-limited. |
+| `GET /api/auth/github`, callback | State-protected GitHub App-compatible identity flow; synchronizes only GitHub-reported memberships. |
 | `GET /api/repos` | Lists repositories available to the signed-in dashboard user. |
+| `PATCH /api/repos/:repoId` | ADMIN/OWNER repository enable control. |
+| `POST /api/repos/:repoId/index` | ADMIN/OWNER durable reindex request. |
 | `GET /api/repos/:repoId/reviews` | Paginated review history, filterable by PR, status, and risk range. |
 | `GET /api/reviews/:reviewId` | Review detail, findings, signals, and standards provenance. |
 | `POST /api/reviews/:reviewId/retry` | Explicit, authorized retry for a failed review; creates a new idempotent job. |
@@ -195,7 +200,7 @@ Dashboard routes require an authenticated user and repository membership. Worker
 ## Security and reliability
 
 - Validate the GitHub webhook HMAC against the raw body with a timing-safe comparison. Require a configured secret, enforce a small body limit, and log only redacted metadata.
-- Treat GitHub delivery IDs and review head SHAs as idempotency keys. Queue first, acknowledge quickly, and make publication idempotent using the persisted GitHub review/comment IDs.
+- Treat GitHub delivery IDs and review head SHAs as idempotency keys. Queue first, acknowledge quickly, and use a transactional outbox plus a stable review marker to reduce duplicate external publication. Document and monitor the remaining at-least-once race.
 - Authenticate as a GitHub App using a short-lived JWT signed by a protected private key. Request installation tokens on demand, cache only until expiry, use least-privilege permissions, and never expose app credentials to the browser.
 - Enforce repository and installation ownership on every dashboard query and retrieval query. Encrypt configuration secrets at rest and keep OpenAI/GitHub secrets in the deployment secret manager.
 - Use transactional job claims, exponential retry for GitHub/OpenAI `429` and `5xx` responses, bounded attempts, and a visible failed/dead-letter state. Do not retry invalid signatures, validation errors, or unsupported diffs.

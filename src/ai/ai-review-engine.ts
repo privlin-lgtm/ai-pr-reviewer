@@ -57,7 +57,10 @@ export class AIReviewEngine {
 
     const enrichedRequest = await this.addRetrievedStandards(request);
     const rawResponse = await this.requestCompletion(enrichedRequest);
-    return parseReviewResponse(rawResponse);
+    return verifyCitedSources(
+      parseReviewResponse(rawResponse),
+      enrichedRequest.ragSourceProvenance ?? [],
+    );
   }
 
   private async addRetrievedStandards(
@@ -68,16 +71,23 @@ export class AIReviewEngine {
     }
 
     try {
-      const retrievedStandards = await this.options.contextProvider.getStandards(request);
-      if (retrievedStandards.length === 0) {
+      const retrieved = await this.options.contextProvider.getStandards(request);
+      const context = Array.isArray(retrieved)
+        ? { snippets: retrieved, sources: [] }
+        : retrieved;
+      if (context.snippets.length === 0) {
         return request;
       }
 
       return {
         ...request,
+        ragSourceProvenance: [
+          ...(request.ragSourceProvenance ?? []),
+          ...context.sources,
+        ],
         repositoryStandards: [
           ...(request.repositoryStandards ?? []),
-          ...retrievedStandards,
+          ...context.snippets,
         ],
       };
     } catch (error) {
@@ -128,6 +138,28 @@ function parseReviewResponse(response: string): AIReviewResult {
   }
 
   return validation.data;
+}
+
+function verifyCitedSources(
+  result: AIReviewResult,
+  sources: AIReviewResult["sourceProvenance"],
+): AIReviewResult {
+  const sourceProvenance = sources ?? [];
+  const validReferences = new Set(sourceProvenance.map((source) => source.reference));
+  return {
+    ...result,
+    findings: result.findings.map((finding) => {
+      if (finding.standardViolation === null) {
+        return finding;
+      }
+      return finding.standardViolation.references.every((reference) =>
+        validReferences.has(reference),
+      )
+        ? finding
+        : { ...finding, standardViolation: null };
+    }),
+    sourceProvenance,
+  };
 }
 
 function buildSystemPrompt(): string {

@@ -1,21 +1,29 @@
+import { cookies } from "next/headers";
+
 import { CategoryChart } from "../components/dashboard/category-chart";
 import { ReviewHistory } from "../components/dashboard/review-history";
 import { StatCard } from "../components/dashboard/stat-card";
+import {
+  readGitHubAppSessionValue,
+  tryLoadGitHubAppIdentityConfig,
+} from "../src/auth/github-app-identity";
 import { loadDashboardData } from "../src/dashboard/data";
 import {
   resolveDashboardScope,
-  UnconfiguredDashboardIdentityProvider,
+  type DashboardIdentity,
 } from "../src/dashboard/scope";
 import type { DashboardData } from "../src/dashboard/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const identityProvider = new UnconfiguredDashboardIdentityProvider();
-  const identity = await identityProvider.getIdentity();
+  const identity = await getDashboardIdentity();
+  const databaseConfigured =
+    process.env.DATABASE_URL !== undefined &&
+    process.env.DATABASE_URL.trim().length > 0;
   const result =
-    process.env.DATABASE_URL === undefined
-      ? await loadDashboardData(null)
+    !databaseConfigured
+      ? { status: "unconfigured" as const }
       : await resolveAndLoadDashboardData(identity);
 
   return (
@@ -40,8 +48,9 @@ export default async function DashboardPage() {
 
       {result.status === "unauthenticated" ? (
         <DatabaseNotice
-          title="Dashboard authentication is not configured"
-          message="Connect a server-side identity provider that resolves a User ID and RepositoryMembership scope before viewing repository metrics."
+          title="Sign in required"
+          message="Sign in with GitHub after configuring the App callback and session secret. Until then, this dashboard intentionally displays no repository data."
+          action={{ href: "/api/auth/github", label: "Connect GitHub" }}
         />
       ) : null}
 
@@ -55,7 +64,7 @@ export default async function DashboardPage() {
 }
 
 async function resolveAndLoadDashboardData(
-  identity: Awaited<ReturnType<UnconfiguredDashboardIdentityProvider["getIdentity"]>>,
+  identity: DashboardIdentity | null,
 ) {
   if (identity === null) {
     return loadDashboardData(null);
@@ -63,6 +72,19 @@ async function resolveAndLoadDashboardData(
 
   const { prisma } = await import("../src/lib/prisma");
   return loadDashboardData(await resolveDashboardScope(prisma, identity));
+}
+
+async function getDashboardIdentity(): Promise<DashboardIdentity | null> {
+  const config = tryLoadGitHubAppIdentityConfig();
+  if (config === null) {
+    return null;
+  }
+  const cookieStore = await cookies();
+  const session = readGitHubAppSessionValue(
+    cookieStore.get(config.sessionCookieName)?.value ?? null,
+    config,
+  );
+  return session === null ? null : { userId: session.userId };
 }
 
 function DashboardContent({
@@ -114,12 +136,28 @@ function DashboardContent({
   );
 }
 
-function DatabaseNotice({ message, title }: Readonly<{ message: string; title: string }>) {
+function DatabaseNotice({
+  action,
+  message,
+  title,
+}: Readonly<{
+  action?: { href: string; label: string };
+  message: string;
+  title: string;
+}>) {
   return (
     <section aria-labelledby="database-notice-title" className="mt-7 rounded-2xl border border-amber-400/40 bg-amber-950/25 p-6">
       <p className="text-sm font-semibold uppercase tracking-[0.2em] text-amber-300">Development dashboard</p>
       <h2 id="database-notice-title" className="mt-2 text-xl font-semibold text-white">{title}</h2>
       <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-300">{message}</p>
+      {action === undefined ? null : (
+        <a
+          className="mt-4 inline-flex rounded-lg bg-sky-400 px-3 py-2 text-sm font-semibold text-slate-950 transition hover:bg-sky-300"
+          href={action.href}
+        >
+          {action.label}
+        </a>
+      )}
     </section>
   );
 }

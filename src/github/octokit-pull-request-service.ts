@@ -14,6 +14,7 @@ import type {
 } from "./types.js";
 
 const DEFAULT_MAXIMUM_CHANGED_FILES = 3_000;
+const MAXIMUM_REVIEW_LOOKUP_PAGES = 10;
 
 export class OctokitPullRequestService implements GitHubPullRequestService {
   constructor(
@@ -92,6 +93,41 @@ export class OctokitPullRequestService implements GitHubPullRequestService {
         return files;
       }
     }
+  }
+
+  async findPublishedReviewByMarker(
+    target: PullRequestTarget,
+    marker: string,
+  ): Promise<PublishedReview | null> {
+    if (marker.trim().length === 0) {
+      throw new RangeError("A publication marker is required.");
+    }
+
+    const octokit = await this.getInstallationOctokit(target.installationId);
+    for (let page = 1; page <= MAXIMUM_REVIEW_LOOKUP_PAGES; page += 1) {
+      const response = await this.run(() =>
+        octokit.request("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+          owner: target.owner,
+          page,
+          per_page: 100,
+          pull_number: target.pullNumber,
+          repo: target.repository,
+        }),
+      );
+      const reviews = readReviewList(readResponseData(response));
+      const match = reviews.find((review) => review.body?.includes(marker));
+      if (match !== undefined) {
+        return {
+          githubReviewId: match.id,
+          htmlUrl: match.htmlUrl,
+        };
+      }
+      if (reviews.length < 100) {
+        return null;
+      }
+    }
+
+    return null;
   }
 
   async publishReview(submission: ReviewSubmission): Promise<PublishedReview> {
@@ -230,6 +266,24 @@ function toPublishedReview(data: unknown): PublishedReview {
     githubReviewId: readInteger(data, "id"),
     htmlUrl: htmlUrl ?? null,
   };
+}
+
+function readReviewList(
+  data: unknown,
+): Array<{ body: string | null; htmlUrl: string | null; id: number }> {
+  if (!Array.isArray(data)) {
+    throw new Error("GitHub review-list response is not an array.");
+  }
+  return data.map((review) => {
+    if (!isRecord(review)) {
+      throw new Error("GitHub review-list response contains an invalid review.");
+    }
+    return {
+      body: readOptionalString(review, "body") ?? null,
+      htmlUrl: readOptionalString(review, "html_url") ?? null,
+      id: readInteger(review, "id"),
+    };
+  });
 }
 
 function readResponseData(response: unknown): unknown {

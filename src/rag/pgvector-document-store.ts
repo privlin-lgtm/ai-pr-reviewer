@@ -24,12 +24,19 @@ export class PgVectorRepositoryDocumentStore implements RepositoryDocumentStore 
           INSERT INTO "RepositoryDocument" (
             "id", "repositoryId", "path", "branch", "contentSha", "chunkIndex",
             "content", "embeddingModel", "embeddingDimensions", "embedding",
-            "createdAt", "updatedAt"
+            "metadata", "createdAt", "updatedAt"
           ) VALUES (
             ${randomUUID()}, ${document.repositoryId}, ${document.path},
             ${document.branch}, ${document.contentSha}, ${chunk.chunkIndex},
             ${chunk.content}, ${document.embeddingModel}, ${document.embeddingDimensions},
-            ${vector}::vector, NOW(), NOW()
+            ${vector}::vector,
+            ${JSON.stringify({
+              ...(document.provenance ?? {}),
+              chunkIndex: chunk.chunkIndex,
+              contentSha: document.contentSha,
+              sourcePath: document.path,
+            })}::jsonb,
+            NOW(), NOW()
           )
           ON CONFLICT ("repositoryId", "path", "branch", "contentSha", "chunkIndex")
           DO UPDATE SET
@@ -37,6 +44,7 @@ export class PgVectorRepositoryDocumentStore implements RepositoryDocumentStore 
             "embeddingModel" = EXCLUDED."embeddingModel",
             "embeddingDimensions" = EXCLUDED."embeddingDimensions",
             "embedding" = EXCLUDED."embedding",
+            "metadata" = EXCLUDED."metadata",
             "updatedAt" = NOW()
         `;
       }

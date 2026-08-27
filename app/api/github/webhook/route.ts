@@ -1,87 +1,60 @@
 import { Webhooks } from "@octokit/webhooks";
 
 import { loadGitHubAppConfig } from "../../../../src/github/config";
+import { handleGitHubWebhookRequest } from "../../../../src/github/webhook-route";
+import { PrismaWebhookRateLimiter } from "../../../../src/github/webhook-rate-limiter";
 import { PrismaReviewJobQueue } from "../../../../src/reviews/review-job-queue";
 
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    const body = await request.text();
     const { prisma } = await import("../../../../src/lib/prisma");
     const config = loadGitHubAppConfig();
-    const signature = request.headers.get("x-hub-signature-256");
-    const verified =
-      signature !== null &&
-      (await new Webhooks({ secret: config.webhookSecret }).verify(body, signature));
-    if (!verified) {
-      return Response.json({ error: "Invalid GitHub webhook signature." }, { status: 401 });
-    }
-
-    const eventName = request.headers.get("x-github-event");
-    if (eventName !== "pull_request") {
-      return new Response(null, { status: 204 });
-    }
-
-    const event = parsePullRequestEvent(
-      body,
-      request.headers.get("x-github-delivery") ?? "",
-    );
-    if (event === null) {
-      return new Response(null, { status: 204 });
-    }
-
-    await new PrismaReviewJobQueue(prisma).enqueue(event);
-
-    return Response.json({ status: "accepted" }, { status: 202 });
-  } catch (error) {
-    console.error("GitHub webhook ingestion failed.", error);
+    return handleGitHubWebhookRequest(request, {
+      maximumBodyBytes: parsePositiveInteger(
+        process.env.GITHUB_WEBHOOK_MAX_BYTES,
+        1_048_576,
+        "GITHUB_WEBHOOK_MAX_BYTES",
+      ),
+      queue: new PrismaReviewJobQueue(prisma),
+      rateLimiter: new PrismaWebhookRateLimiter(prisma, {
+        limit: parsePositiveInteger(
+          process.env.GITHUB_WEBHOOK_RATE_LIMIT,
+          120,
+          "GITHUB_WEBHOOK_RATE_LIMIT",
+        ),
+        windowMilliseconds: parsePositiveInteger(
+          process.env.GITHUB_WEBHOOK_RATE_WINDOW_MS,
+          60_000,
+          "GITHUB_WEBHOOK_RATE_WINDOW_MS",
+        ),
+      }),
+      signatureVerifier: {
+        verify: async (body, signature) =>
+          signature !== undefined &&
+          new Webhooks({ secret: config.webhookSecret }).verify(body, signature),
+      },
+    });
+  } catch {
     return Response.json(
-      { error: "Webhook delivery could not be persisted. GitHub may retry it." },
-      { status: 503 },
+      { error: "Webhook ingress is temporarily unavailable." },
+      { headers: { "cache-control": "no-store" }, status: 503 },
     );
   }
 }
 
-function parsePullRequestEvent(body: string, deliveryId: string) {
-  const payload: unknown = JSON.parse(body);
-  if (deliveryId.length === 0 || !isRecord(payload) || !isRecord(payload["repository"]) || !isRecord(payload["pull_request"]) || !isRecord(payload["installation"])) {
-    throw new Error("Invalid pull_request webhook payload.");
+function parsePositiveInteger(
+  value: string | undefined,
+  defaultValue: number,
+  name: string,
+): number {
+  if (value === undefined || value.trim().length === 0) {
+    return defaultValue;
   }
-
-  const action = payload["action"];
-  if (action !== "opened" && action !== "synchronize") {
-    return null;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${name} must be a positive integer.`);
   }
-
-  const repository = payload["repository"];
-  const owner = isRecord(repository["owner"]) ? repository["owner"] : null;
-  const pullRequest = payload["pull_request"];
-  const head = isRecord(pullRequest["head"]) ? pullRequest["head"] : null;
-  const installation = payload["installation"];
-  if (
-    owner === null ||
-    head === null ||
-    typeof repository["id"] !== "number" ||
-    typeof repository["name"] !== "string" ||
-    typeof owner["login"] !== "string" ||
-    typeof payload["number"] !== "number" ||
-    typeof pullRequest["id"] !== "number" ||
-    typeof head["sha"] !== "string" ||
-    typeof installation["id"] !== "number"
-  ) {
-    throw new Error("Invalid pull_request webhook fields.");
-  }
-
-  return {
-    action: action as "opened" | "synchronize",
-    deliveryId,
-    installationId: installation["id"],
-    repository: { id: repository["id"], name: repository["name"], owner: owner["login"] },
-    pullRequest: { headSha: head["sha"], id: pullRequest["id"], number: payload["number"] },
-  };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
+  return parsed;
 }

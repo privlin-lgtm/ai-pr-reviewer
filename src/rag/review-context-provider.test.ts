@@ -81,9 +81,18 @@ test("embeds a bounded review query and scopes retrieval to repository, branch, 
     repositoryId: "repository-id",
   });
   assert.match(embeddingModel.queries[0]!, /Pull request: #42/);
-  assert.deepEqual(standards, [
-    "[standard:docs/security.md#2@content-sha]\nAlways validate webhook signatures.",
-  ]);
+  assert.deepEqual(standards, {
+    snippets: [
+      "[standard:docs/security.md#2@content-sha]\nAlways validate webhook signatures.",
+    ],
+    sources: [{
+      chunkIndex: 2,
+      contentSha: "content-sha",
+      path: "docs/security.md",
+      reference: "[standard:docs/security.md#2@content-sha]",
+      similarity: 0.93,
+    }],
+  });
   assert.equal(toVectorLiteral([0.1, 0.2]), "[0.1,0.2]");
   assert.match(PGVECTOR_RETRIEVAL_QUERY_DESCRIPTION, /repositoryId/);
 });

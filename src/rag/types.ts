@@ -18,6 +18,7 @@ export interface EmbeddedRepositoryDocument {
   embeddingDimensions: number;
   embeddingModel: string;
   path: string;
+  provenance?: Record<string, boolean | number | string>;
   repositoryId: string;
 }
 

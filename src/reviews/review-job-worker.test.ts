@@ -19,41 +19,61 @@ const job: ClaimedReviewJob = {
   repositoryName: "repo",
 };
 
-test("claims, processes, and completes one durable job", async () => {
-  const calls: string[] = [];
-  const store: ReviewJobStore = {
-    cancel: async () => { calls.push("cancel"); },
+function createStore(
+  overrides: Partial<ReviewJobStore> = {},
+): ReviewJobStore {
+  return {
+    cancel: async () => true,
     claimNext: async () => job,
-    complete: async () => { calls.push("complete"); },
-    fail: async () => { calls.push("fail"); },
+    complete: async () => true,
+    fail: async () => true,
+    heartbeat: async () => true,
+    ...overrides,
   };
-  const handler: ReviewJobHandler = { process: async () => { calls.push("process"); } };
+}
+
+test("claims, heartbeats, processes, and completes one durable job", async () => {
+  const calls: string[] = [];
+  const store = createStore({
+    complete: async (_id, workerId) => {
+      calls.push(`complete-${workerId}`);
+      return true;
+    },
+    heartbeat: async () => {
+      calls.push("heartbeat");
+      return true;
+    },
+  });
+  const handler: ReviewJobHandler = {
+    process: async () => {
+      calls.push("process");
+    },
+  };
 
   assert.equal(await new ReviewJobWorker(store, handler, "worker-a").runOnce(), true);
-  assert.deepEqual(calls, ["process", "complete"]);
+  assert.deepEqual(calls, ["process", "heartbeat", "complete-worker-a"]);
 });
 
-test("records a failure for retry handling and does not complete the job", async () => {
+test("classifies and records a failure for retry handling", async () => {
   const calls: string[] = [];
-  const store: ReviewJobStore = {
-    cancel: async () => { calls.push("cancel"); },
-    claimNext: async () => job,
-    complete: async () => { calls.push("complete"); },
-    fail: async (_id, attempt) => { calls.push(`fail-${attempt}`); },
+  const store = createStore({
+    fail: async (_id, workerId, attempt, failure) => {
+      calls.push(`${workerId}-${attempt}-${failure.code}-${failure.retryable}`);
+      return true;
+    },
+  });
+  const handler: ReviewJobHandler = {
+    process: async () => {
+      throw Object.assign(new Error("temporarily unavailable"), { status: 503 });
+    },
   };
-  const handler: ReviewJobHandler = { process: async () => { throw new Error("transient"); } };
 
   await new ReviewJobWorker(store, handler, "worker-a").runOnce();
-  assert.deepEqual(calls, ["fail-1"]);
+  assert.deepEqual(calls, ["worker-a-1-HTTP_503-true"]);
 });
 
 test("does not process when no queued job can be claimed", async () => {
-  const store: ReviewJobStore = {
-    cancel: async () => undefined,
-    claimNext: async () => null,
-    complete: async () => undefined,
-    fail: async () => undefined,
-  };
+  const store = createStore({ claimNext: async () => null });
   const handler: ReviewJobHandler = {
     process: async () => assert.fail("handler should not run"),
   };
@@ -63,16 +83,34 @@ test("does not process when no queued job can be claimed", async () => {
 
 test("cancels a claimed job whose webhook head was superseded", async () => {
   const calls: string[] = [];
-  const store: ReviewJobStore = {
-    cancel: async () => { calls.push("cancel"); },
-    claimNext: async () => job,
-    complete: async () => { calls.push("complete"); },
-    fail: async () => { calls.push("fail"); },
-  };
+  const store = createStore({
+    cancel: async () => {
+      calls.push("cancel");
+      return true;
+    },
+    heartbeat: async () => {
+      calls.push("heartbeat");
+      return true;
+    },
+  });
   const handler: ReviewJobHandler = {
     process: async () => "cancelled",
   };
 
   assert.equal(await new ReviewJobWorker(store, handler, "worker-a").runOnce(), true);
-  assert.deepEqual(calls, ["cancel"]);
+  assert.deepEqual(calls, ["heartbeat", "cancel"]);
+});
+
+test("does not transition a job after its lease is lost", async () => {
+  const calls: string[] = [];
+  const store = createStore({
+    complete: async () => {
+      calls.push("complete");
+      return true;
+    },
+    heartbeat: async () => false,
+  });
+
+  await new ReviewJobWorker(store, { process: async () => undefined }, "worker-a").runOnce();
+  assert.deepEqual(calls, []);
 });

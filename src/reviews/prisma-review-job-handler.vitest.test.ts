@@ -66,8 +66,10 @@ const reviewResult: AIReviewResult = {
 };
 
 function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
-  const transaction = {
-    gitHubInstallation: { upsert: vi.fn().mockResolvedValue({ id: "installation-1" }) },
+  const persistTransaction = {
+    gitHubInstallation: {
+      upsert: vi.fn().mockResolvedValue({ id: "installation-1", installedByUserId: null }),
+    },
     pullRequest: { upsert: vi.fn().mockResolvedValue({ id: "pull-request-1" }) },
     repository: { upsert: vi.fn().mockResolvedValue({ id: "repository-1" }) },
     review: {
@@ -75,29 +77,37 @@ function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
       upsert: vi.fn().mockResolvedValue({ githubReviewId: null, id: "review-1" }),
     },
   };
-  const prisma = {
-    $transaction: vi.fn(async (work: unknown) => {
-      if (typeof work === "function") {
-        return work(transaction);
-      }
-      return Promise.all(work as Promise<unknown>[]);
-    }),
+  const analysisTransaction = {
     finding: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       upsert: vi.fn().mockResolvedValue({ id: "finding-1" }),
     },
+    publicationOutbox: { upsert: vi.fn().mockResolvedValue({ id: "outbox-1" }) },
     review: { update: vi.fn().mockResolvedValue({}) },
     reviewMetrics: { upsert: vi.fn().mockResolvedValue({}) },
+  };
+  let transactionCalls = 0;
+  const prisma = {
+    $transaction: vi.fn(async (work: unknown) => {
+      if (typeof work === "function") {
+        transactionCalls += 1;
+        return work(transactionCalls === 1 ? persistTransaction : analysisTransaction);
+      }
+      return Promise.all(work as Promise<unknown>[]);
+    }),
+    review: { update: vi.fn().mockResolvedValue({}) },
   };
   const pullRequests = {
     fetchDiff: vi.fn().mockResolvedValue({ ...metadata, content: "diff --git a/a b/a" }),
     fetchMetadata: vi.fn().mockResolvedValue(metadata),
+    findPublishedReviewByMarker: vi.fn().mockResolvedValue(null),
     listChangedFiles: vi.fn().mockResolvedValue(files),
     publishReview: vi.fn().mockResolvedValue({ githubReviewId: 5, htmlUrl: null }),
   };
   const reviewEngine = { analyzeDiff: vi.fn().mockResolvedValue(reviewResult) };
 
   return {
+    analysisTransaction,
     handler: new PrismaReviewJobHandler(
       prisma as never,
       pullRequests,
@@ -111,8 +121,8 @@ function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
 }
 
 describe("PrismaReviewJobHandler", () => {
-  it("analyzes, publishes, and completes a current review job", async () => {
-    const { handler, prisma, pullRequests, reviewEngine } = createHandler();
+  it("persists findings and a transactional publication outbox without posting externally", async () => {
+    const { analysisTransaction, handler, pullRequests, reviewEngine } = createHandler();
 
     await expect(handler.process(job)).resolves.toBeUndefined();
     expect(reviewEngine.analyzeDiff).toHaveBeenCalledWith({
@@ -125,26 +135,30 @@ describe("PrismaReviewJobHandler", () => {
       },
       ragContext: { branch: metadata.baseRef, repositoryId: "repository-1" },
     });
-    expect(pullRequests.publishReview).toHaveBeenCalledWith(
+    expect(analysisTransaction.publicationOutbox.upsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        commitSha: metadata.headSha,
-        comments: [expect.objectContaining({ line: 1, path: "src/auth.ts", side: "RIGHT" })],
-        event: "COMMENT",
+        create: expect.objectContaining({
+          idempotencyKey: "review:review-1:github-review:v1",
+          payload: expect.objectContaining({
+            comments: [expect.objectContaining({ line: 1, path: "src/auth.ts" })],
+            marker: expect.stringContaining("review:review-1:github-review:v1"),
+          }),
+        }),
       }),
     );
-    expect(prisma.review.update).toHaveBeenCalledWith(
+    expect(pullRequests.publishReview).not.toHaveBeenCalled();
+    expect(analysisTransaction.review.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) }),
     );
-    expect(prisma.finding.updateMany).toHaveBeenCalledOnce();
-    expect(prisma.reviewMetrics.upsert).toHaveBeenCalledOnce();
+    expect(analysisTransaction.finding.updateMany).toHaveBeenCalledTimes(2);
   });
 
-  it("skips analysis and publication for an already completed review", async () => {
-    const { handler, pullRequests, reviewEngine } = createHandler({ status: "COMPLETED" });
+  it("skips analysis and outbox creation for an already completed review", async () => {
+    const { analysisTransaction, handler, reviewEngine } = createHandler({ status: "COMPLETED" });
 
     await expect(handler.process(job)).resolves.toBeUndefined();
     expect(reviewEngine.analyzeDiff).not.toHaveBeenCalled();
-    expect(pullRequests.publishReview).not.toHaveBeenCalled();
+    expect(analysisTransaction.publicationOutbox.upsert).not.toHaveBeenCalled();
   });
 
   it("marks a persisted review as failed when analysis fails", async () => {
@@ -156,5 +170,44 @@ describe("PrismaReviewJobHandler", () => {
       data: { failureReason: "model unavailable", status: "FAILED" },
       where: { id: "review-1" },
     });
+  });
+
+  it("persists only retrieved standard citations with a finding", async () => {
+    const { analysisTransaction, handler, reviewEngine } = createHandler();
+    reviewEngine.analyzeDiff.mockResolvedValueOnce({
+      ...reviewResult,
+      findings: [{
+        ...reviewResult.findings[0]!,
+        standardViolation: {
+          areas: ["SECURITY"],
+          references: ["[standard:docs/security.md#2@source-sha]"],
+        },
+      }],
+      sourceProvenance: [{
+        chunkIndex: 2,
+        contentSha: "source-sha",
+        path: "docs/security.md",
+        reference: "[standard:docs/security.md#2@source-sha]",
+        similarity: 0.91,
+      }],
+    });
+
+    await handler.process(job);
+
+    expect(analysisTransaction.finding.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          evidence: expect.objectContaining({
+            citedStandards: [{
+              chunkIndex: 2,
+              contentSha: "source-sha",
+              path: "docs/security.md",
+              reference: "[standard:docs/security.md#2@source-sha]",
+              similarity: 0.91,
+            }],
+          }),
+        }),
+      }),
+    );
   });
 });

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 
-import type { PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 import type { AIReviewEngine } from "../ai/ai-review-engine.js";
 import type { AIReviewFinding, AIReviewResult } from "../ai/types.js";
@@ -12,6 +12,11 @@ import type {
 } from "../github/types.js";
 import { PullRequestRiskScorer } from "../risk/pull-request-risk-scorer.js";
 import type { ClaimedReviewJob, ReviewJobHandler } from "./review-job-worker.js";
+import {
+  publicationMarker,
+  type ReviewPublicationPayload,
+} from "./publication-outbox.js";
+import { redactMessage } from "../observability/structured-logger.js";
 
 const DEFAULT_COMMENT_CONFIDENCE = 0.7;
 const PROMPT_VERSION = "review-v1";
@@ -87,61 +92,27 @@ export class PrismaReviewJobHandler implements ReviewJobHandler {
           (finding) => finding.category === "SECURITY",
         ).length,
       });
-      const findings = await this.persistFindings(persisted.review.id, result);
-      const comments = toReviewComments(result.findings, files, this.commentConfidence);
-      const published =
-        persisted.review.githubReviewId === null
-          ? await this.pullRequests.publishReview({
-              ...target,
-              body: buildReviewBody(result, risk.score),
-              comments,
-              commitSha: metadata.headSha,
-              event: "COMMENT",
-            })
-          : null;
-
-      await this.prisma.$transaction([
-        this.prisma.review.update({
-          data: {
-            completedAt: new Date(),
-            githubReviewId:
-              published === null ? undefined : BigInt(published.githubReviewId),
-            riskScore: risk.score,
-            status: "COMPLETED",
-            summary: result.summary,
-          },
-          where: { id: persisted.review.id },
-        }),
-        this.prisma.finding.updateMany({
-          data: { publishedAt: new Date(), status: "PUBLISHED" },
-          where: {
-            id: { in: findings.map((finding) => finding.id) },
-            status: "PENDING",
-          },
-        }),
-        this.prisma.reviewMetrics.upsert({
-          create: {
-            commentsPublished: comments.length,
-            durationMs: Date.now() - persisted.startedAt.valueOf(),
-            filesAnalyzed: files.filter((file) => file.patch !== null).length,
-            filesChanged: files.length,
-            modelCallCount: 1,
-            reviewId: persisted.review.id,
-          },
-          update: {
-            commentsPublished: comments.length,
-            durationMs: Date.now() - persisted.startedAt.valueOf(),
-            filesAnalyzed: files.filter((file) => file.patch !== null).length,
-            filesChanged: files.length,
-            modelCallCount: 1,
-          },
-          where: { reviewId: persisted.review.id },
-        }),
-      ]);
+      const candidates = toPublicationCandidates(
+        result.findings,
+        files,
+        this.commentConfidence,
+      );
+      await this.persistAnalysisAndPublication({
+        candidates,
+        files,
+        metadata,
+        persisted,
+        result,
+        riskScore: risk.score,
+        target,
+      });
     } catch (error) {
       await this.prisma.review.update({
         data: {
-          failureReason: error instanceof Error ? error.message.slice(0, 8_000) : "Unknown review failure.",
+          failureReason: redactMessage(
+            error instanceof Error ? error.message : "Unknown review failure.",
+            8_000,
+          ),
           status: "FAILED",
         },
         where: { id: persisted.review.id },
@@ -180,6 +151,44 @@ export class PrismaReviewJobHandler implements ReviewJobHandler {
         },
         where: { githubRepositoryId: job.repositoryGithubId },
       });
+      if (typeof installation.installedByUserId === "string") {
+        await transaction.repositoryMembership.upsert({
+          create: {
+            repositoryId: repository.id,
+            role: "ADMIN",
+            userId: installation.installedByUserId,
+          },
+          update: { role: "ADMIN" },
+          where: {
+            userId_repositoryId: {
+              repositoryId: repository.id,
+              userId: installation.installedByUserId,
+            },
+          },
+        });
+      }
+      if (repository.lastIndexedAt === null) {
+        await transaction.repositoryIndexJob.upsert({
+          create: {
+            branch: repository.defaultBranch,
+            installationGithubId: job.installationGithubId,
+            owner: repository.ownerLogin,
+            repositoryId: repository.id,
+            repositoryName: repository.name,
+          },
+          update: {},
+          where: {
+            repositoryId_branch: {
+              branch: repository.defaultBranch,
+              repositoryId: repository.id,
+            },
+          },
+        });
+        await transaction.repository.updateMany({
+          data: { indexStatus: "QUEUED" },
+          where: { id: repository.id, indexStatus: "IDLE" },
+        });
+      }
       const pullRequest = await transaction.pullRequest.upsert({
         create: toPullRequestData(metadata, repository.id),
         update: toPullRequestData(metadata, repository.id),
@@ -225,52 +234,149 @@ export class PrismaReviewJobHandler implements ReviewJobHandler {
     });
   }
 
-  private async persistFindings(reviewId: string, result: AIReviewResult) {
-    return this.prisma.$transaction(
-      result.findings.map((finding) =>
-        this.prisma.finding.upsert({
-          create: {
-            category: finding.category,
-            confidence: finding.confidence,
-            endLine: finding.endLine,
-            evidence: {
-              source: "openai",
-              ...(finding.standardViolation === null
-                ? {}
-                : { standardViolation: finding.standardViolation }),
-            },
-            fingerprint: findingFingerprint(finding),
-            path: finding.path,
-            rationale: finding.rationale,
-            reviewId,
-            severity: finding.severity,
-            side: finding.side,
-            startLine: finding.startLine,
-            status: "PENDING",
-            suggestedFix: finding.recommendation,
-            title: finding.title,
-          },
-          update: {
-            confidence: finding.confidence,
-            evidence: {
-              source: "openai",
-              ...(finding.standardViolation === null
-                ? {}
-                : { standardViolation: finding.standardViolation }),
-            },
-            rationale: finding.rationale,
-            suggestedFix: finding.recommendation,
-            title: finding.title,
-          },
-          where: {
-            reviewId_fingerprint: {
+  private async persistAnalysisAndPublication(input: {
+    candidates: PublicationCandidate[];
+    files: ChangedFile[];
+    metadata: PullRequestMetadata;
+    persisted: Awaited<ReturnType<PrismaReviewJobHandler["persistPullRequest"]>>;
+    result: AIReviewResult;
+    riskScore: number;
+    target: {
+      installationId: number;
+      owner: string;
+      pullNumber: number;
+      repository: string;
+    };
+  }): Promise<void> {
+    const {
+      candidates,
+      files,
+      metadata,
+      persisted,
+      result,
+      riskScore,
+      target,
+    } = input;
+    const idempotencyKey = `review:${persisted.review.id}:github-review:v1`;
+    const payload: ReviewPublicationPayload = {
+      body: buildReviewBody(result, riskScore),
+      comments: candidates.map((candidate) => candidate.comment),
+      commitSha: metadata.headSha,
+      event: "COMMENT",
+      marker: publicationMarker(idempotencyKey),
+      target,
+      version: 1,
+    };
+
+    await this.prisma.$transaction(async (transaction) => {
+      const persistedFindings = await Promise.all(
+        result.findings.map((finding) =>
+          transaction.finding.upsert({
+            create: {
+              category: finding.category,
+              confidence: finding.confidence,
+              endLine: finding.endLine,
+              evidence: toFindingEvidence(finding, result),
               fingerprint: findingFingerprint(finding),
-              reviewId,
+              path: finding.path,
+              rationale: finding.rationale,
+              reviewId: persisted.review.id,
+              severity: finding.severity,
+              side: finding.side,
+              startLine: finding.startLine,
+              status: "PENDING",
+              suggestedFix: finding.recommendation,
+              title: finding.title,
             },
+            update: {
+              confidence: finding.confidence,
+              evidence: toFindingEvidence(finding, result),
+              rationale: finding.rationale,
+              suggestedFix: finding.recommendation,
+              title: finding.title,
+            },
+            where: {
+              reviewId_fingerprint: {
+                fingerprint: findingFingerprint(finding),
+                reviewId: persisted.review.id,
+              },
+            },
+          }),
+        ),
+      );
+      const findingIdsByFingerprint = new Map(
+        persistedFindings.map((finding, index) => [
+          findingFingerprint(result.findings[index]!),
+          finding.id,
+        ]),
+      );
+      const candidateIds = candidates.map((candidate) => {
+        const id = findingIdsByFingerprint.get(candidate.fingerprint);
+        if (id === undefined) {
+          throw new Error("Persisted finding is missing its publication candidate.");
+        }
+        return id;
+      });
+      const allFindingIds = persistedFindings.map((finding) => finding.id);
+      const outbox = await transaction.publicationOutbox.upsert({
+        create: {
+          idempotencyKey,
+          payload: payload as unknown as Prisma.InputJsonValue,
+          reviewId: persisted.review.id,
+        },
+        update: {},
+        where: { reviewId: persisted.review.id },
+      });
+
+      if (candidateIds.length > 0) {
+        await transaction.finding.updateMany({
+          data: {
+            publicationOutboxId: outbox.id,
+            publishedAt: null,
+            status: "PENDING",
           },
-        }),
-      ),
-    );
+          where: { id: { in: candidateIds } },
+        });
+      }
+      await transaction.finding.updateMany({
+        data: {
+          publicationOutboxId: null,
+          publishedAt: null,
+          status: "SUPPRESSED",
+        },
+        where: {
+          ...(allFindingIds.length === 0 ? {} : { id: { notIn: candidateIds } }),
+          reviewId: persisted.review.id,
+        },
+      });
+      await transaction.review.update({
+        data: {
+          completedAt: new Date(),
+          riskScore,
+          status: "COMPLETED",
+          summary: result.summary,
+        },
+        where: { id: persisted.review.id },
+      });
+      await transaction.reviewMetrics.upsert({
+        create: {
+          commentsPublished: 0,
+          durationMs: Date.now() - persisted.startedAt.valueOf(),
+          filesAnalyzed: files.filter((file) => file.patch !== null).length,
+          filesChanged: files.length,
+          modelCallCount: 1,
+          reviewId: persisted.review.id,
+        },
+        update: {
+          commentsPublished: 0,
+          durationMs: Date.now() - persisted.startedAt.valueOf(),
+          filesAnalyzed: files.filter((file) => file.patch !== null).length,
+          filesChanged: files.length,
+          modelCallCount: 1,
+        },
+        where: { reviewId: persisted.review.id },
+      });
+    });
   }
 }
 
@@ -329,11 +435,16 @@ function isPublicApiPath(path: string): boolean {
   return /(^|\/)(api|openapi|graphql)(\/|\.|$)|\.(proto|graphql)$/i.test(path);
 }
 
-function toReviewComments(
+interface PublicationCandidate {
+  comment: ReviewCommentInput;
+  fingerprint: string;
+}
+
+function toPublicationCandidates(
   findings: AIReviewFinding[],
   files: ChangedFile[],
   confidence: number,
-): ReviewCommentInput[] {
+): PublicationCandidate[] {
   const changedLines = new Map(
     files.map((file) => [file.path, changedLinesForFile(file)]),
   );
@@ -353,15 +464,32 @@ function toReviewComments(
     }
 
     return [{
-      body: `**${finding.severity} — ${finding.title}**\n\n${finding.rationale}\n\nSuggested fix: ${finding.recommendation}`,
-      line: finding.endLine,
-      path: finding.path,
-      side: finding.side,
-      ...(finding.startLine < finding.endLine
-        ? { startLine: finding.startLine, startSide: finding.side }
-        : {}),
+      comment: {
+        body: `**${finding.severity} — ${finding.title}**\n\n${finding.rationale}\n\nSuggested fix: ${finding.recommendation}`,
+        line: finding.endLine,
+        path: finding.path,
+        side: finding.side,
+        ...(finding.startLine < finding.endLine
+          ? { startLine: finding.startLine, startSide: finding.side }
+          : {}),
+      },
+      fingerprint: findingFingerprint(finding),
     }];
   });
+}
+
+function toFindingEvidence(finding: AIReviewFinding, result: AIReviewResult): Prisma.InputJsonValue {
+  const references = finding.standardViolation?.references ?? [];
+  const sources = result.sourceProvenance?.filter((source) =>
+    references.includes(source.reference),
+  ) ?? [];
+  return {
+    source: "openai",
+    ...(finding.standardViolation === null
+      ? {}
+      : { standardViolation: finding.standardViolation }),
+    ...(sources.length === 0 ? {} : { citedStandards: sources }),
+  } as unknown as Prisma.InputJsonValue;
 }
 
 function changedLinesForFile(file: ChangedFile): Record<"LEFT" | "RIGHT", Set<number>> {

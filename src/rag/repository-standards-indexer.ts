@@ -50,6 +50,12 @@ export class RepositoryStandardsIndexer {
         embeddingDimensions: this.options.embeddingDimensions,
         embeddingModel: this.options.embeddingModel,
         path: document.path,
+        provenance: {
+          branch: target.branch,
+          contentSha: document.sha,
+          indexedBy: "repository-standards-indexer-v1",
+          sourcePath: document.path,
+        },
         repositoryId: target.repositoryId,
       };
 

@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { PrismaReviewJobStore } from "./prisma-review-job-store.js";
 
-test("claims jobs atomically and records retry or terminal transitions idempotently", async () => {
+test("claims jobs with leases and records owned retry or terminal transitions", async () => {
   const updates: Array<{ data: Record<string, unknown>; where: Record<string, unknown> }> = [];
   const claimed = {
     attempts: 1,
@@ -33,21 +33,39 @@ test("claims jobs atomically and records retry or terminal transitions idempoten
     },
   };
   const store = new PrismaReviewJobStore(prisma as never, {
+    leaseDurationMilliseconds: 100,
     maximumAttempts: 2,
     retryBaseDelayMilliseconds: 1,
   });
 
   assert.deepEqual(await store.claimNext("worker-a"), claimed);
-  await store.complete("job-1");
-  await store.fail("job-1", 1, new Error("retry me"));
-  await store.fail("job-1", 2, new Error("terminal"));
-  await store.cancel("job-1");
+  assert.equal(await store.complete("job-1", "worker-a"), true);
+  assert.equal(
+    await store.fail("job-1", "worker-a", 1, {
+      code: "HTTP_503",
+      message: "retry me",
+      retryable: true,
+    }),
+    true,
+  );
+  assert.equal(
+    await store.fail("job-1", "worker-a", 2, {
+      code: "INVALID",
+      message: "terminal",
+      retryable: false,
+    }),
+    true,
+  );
+  assert.equal(await store.cancel("job-1", "worker-a"), true);
+  assert.equal(await store.heartbeat("job-1", "worker-a"), true);
 
   assert.equal(updates[0]?.data.status, "COMPLETED");
+  assert.equal(updates[0]?.where.lockedBy, "worker-a");
   assert.equal(updates[1]?.data.status, "QUEUED");
   assert.equal(updates[1]?.where.attempts, 1);
   assert.ok(updates[1]?.data.runAfter instanceof Date);
   assert.equal(updates[2]?.data.status, "FAILED");
-  assert.equal(updates[2]?.where.attempts, 2);
+  assert.equal(updates[2]?.data.failureCode, "INVALID");
   assert.equal(updates[3]?.data.status, "COMPLETED");
+  assert.ok(updates[4]?.data.leaseExpiresAt instanceof Date);
 });

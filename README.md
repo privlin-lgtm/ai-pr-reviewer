@@ -1,111 +1,147 @@
 # AI Pull Request Reviewer
 
-An engineering-focused portfolio project for reviewing GitHub pull requests with a GitHub App, OpenAI, deterministic risk scoring, and repository-aware standards retrieval.
+A GitHub App-backed pull-request reviewer with durable PostgreSQL work queues, validated AI findings, pgvector standards retrieval, and a fail-closed dashboard.
 
-> Screenshot placeholder: add a dashboard overview image here.
-> Screenshot placeholder: add a pull-request review with inline findings here.
-
-## What it does
-
-- Verifies GitHub App webhooks and durably queues `pull_request.opened` and `synchronize` events.
-- Fetches PR diffs and changed files with installation-scoped Octokit clients.
-- Produces structured AI findings for bugs, security, performance, maintainability, and cited repository-standard violations.
-- Calculates an explainable, deterministic 1–10 risk score from change volume, security findings, authentication, migrations, APIs, and high-severity issues.
-- Indexes `README.md`, `CONTRIBUTING.md`, `docs/*`, and `architecture/*` into PostgreSQL + pgvector for repository-scoped RAG context.
-- Includes a responsive Next.js dashboard shell for repository metrics, review history, risk, and issue categories.
-
-## Architecture
+## Reliability model
 
 ```mermaid
 flowchart LR
-  GH[GitHub App webhook] --> WH[Next.js webhook route]
-  WH --> Q[(PostgreSQL ReviewJob)]
-  W[Standalone worker process] --> Q
-  W --> OCT[GitHub installation API]
-  W --> RAG[(PostgreSQL + pgvector)]
-  W --> AI[OpenAI review + embeddings]
-  W --> REV[(Review / Finding / Metrics)]
-  W --> OCT
-  UI[Next.js dashboard] --> REV
+  GH[GitHub] --> WH[Bounded, signed webhook route]
+  WH --> RJ[(ReviewJob)]
+  RJ --> RW[Review worker]
+  RW --> DB[(Review, Finding, RAG)]
+  RW --> OB[(PublicationOutbox)]
+  OB --> PW[Publication worker]
+  PW --> GH
+  IJ[(RepositoryIndexJob)] --> IW[Index worker]
 ```
 
-The webhook only verifies and persists work; it does not run AI in the request. Run the worker as a separate long-lived process in deployment. The dashboard intentionally fails closed until a server-side identity provider is wired to `User` and `RepositoryMembership`.
+- Webhooks are verified against the raw, byte-limited body before parsing. Valid deliveries are rate-limited in PostgreSQL and queued idempotently by GitHub delivery ID.
+- Review, finding, metrics, and publication-outbox records are persisted before any GitHub write. Findings remain `PENDING`, `SUPPRESSED`, `PUBLISHED`, or terminally `FAILED` independently.
+- Workers claim rows with `FOR UPDATE SKIP LOCKED`, expiring leases, heartbeats, ownership checks, bounded exponential backoff, and terminal failure state.
+- Publication payloads carry a stable idempotency key and hidden GitHub review marker. On recovery, the publisher searches for the marker before creating a review.
 
-## Stack
+### Important delivery limitation
 
-Next.js App Router, TypeScript, Tailwind CSS, Recharts, PostgreSQL, Prisma 7, pgvector, OpenAI, Octokit, GitHub App, Zod, Node test, and Vitest.
+GitHub's review-create API has no caller-supplied idempotency key. The outbox and marker lookup prevent ordinary duplicate posts, including the common crash-after-GitHub-success case, but a crash/race between lookup and GitHub's write can still produce a duplicate. Publication is therefore **at-least-once**, not exactly-once. Operators should reconcile a terminal/ambiguous outbox record against GitHub before manual intervention.
 
 ## Local setup
 
-1. Install Node.js 20+ and PostgreSQL with the `vector` extension available.
-2. Install dependencies:
+Requirements: Node.js 20+, PostgreSQL with `pgvector`, and a GitHub App.
 
-   ```bash
-   npm install
-   ```
+```bash
+npm ci
+export DATABASE_URL=postgresql://...
+npm run prisma:generate
+npm run prisma:validate
+npx prisma migrate deploy
+npm run dev
+```
 
-3. Configure server-only environment variables:
+Server-only configuration:
 
-   ```text
-   DATABASE_URL=
-   GITHUB_APP_ID=
-   GITHUB_APP_PRIVATE_KEY=
-   GITHUB_WEBHOOK_SECRET=
-   OPENAI_API_KEY=
-   OPENAI_REVIEW_MODEL=
-   OPENAI_EMBEDDING_MODEL=
-   RAG_RETRIEVAL_LIMIT=
-   ```
+```text
+DATABASE_URL=
+GITHUB_APP_ID=
+GITHUB_APP_PRIVATE_KEY=
+GITHUB_WEBHOOK_SECRET=
+OPENAI_API_KEY=
+OPENAI_REVIEW_MODEL=
+OPENAI_EMBEDDING_MODEL=
+RAG_RETRIEVAL_LIMIT=
 
-4. Generate and apply Prisma artifacts/migrations:
+# Webhook protection (optional defaults shown)
+GITHUB_WEBHOOK_MAX_BYTES=1048576
+GITHUB_WEBHOOK_RATE_LIMIT=120
+GITHUB_WEBHOOK_RATE_WINDOW_MS=60000
 
-   ```bash
-   npm run prisma:generate
-   npm run prisma:validate
-   ```
+# Worker (optional defaults shown)
+REVIEW_WORKER_ID=
+REVIEW_WORKER_POLL_MS=1000
+REVIEW_WORKER_HEALTH_PORT=8081
 
-   The database must allow `CREATE EXTENSION vector`; the initial migration creates the `vector(1536)` RAG column and HNSW index.
+# GitHub App user authorization (dashboard)
+GITHUB_APP_CLIENT_ID=
+GITHUB_APP_CLIENT_SECRET=
+GITHUB_APP_CALLBACK_URL=https://your-host/api/auth/github/callback
+APP_SESSION_SECRET=at-least-32-random-bytes
+```
 
-5. Start the dashboard:
+Configure the GitHub App webhook at:
 
-   ```bash
-   npm run dev
-   ```
+```text
+https://your-host/api/github/webhook
+```
 
-6. Configure a GitHub App with pull-request read/write access, repository metadata read access, and a webhook URL at:
+Grant least-privilege repository metadata and pull-request read/write permissions. The reviewer never exposes App credentials, OAuth codes, access tokens, or database URLs to the browser.
 
-   ```text
-   https://your-host/api/github/webhook
-   ```
+## Workers and operations
 
-7. Run the durable review worker separately using the project worker command/configuration. In production, run it as a dedicated process with database access and the same GitHub/OpenAI environment variables.
+Run the long-lived worker separately:
 
-## Design decisions
+```bash
+npm run worker
+```
 
-- **Durable jobs over request-time AI:** webhook requests acknowledge only after idempotent persistence.
-- **RAG is scoped:** retrieval filters by repository, branch, and embedding model to prevent cross-repository context leakage.
-- **Structured output first:** Zod validates AI JSON before findings are persisted or published.
-- **Explainable risk:** risk is deterministic and returns factors/reasons, not an opaque AI score.
-- **Safe dashboard default:** without authenticated repository membership, no global data is queried or shown.
+It processes review jobs, publication outbox rows, and repository indexing jobs fairly in one polling loop. It exposes:
 
-## Challenges and tradeoffs
+```text
+GET /healthz  # process liveness
+GET /readyz   # PostgreSQL readiness probe
+```
 
-- Prisma does not natively materialize pgvector values, so metadata is modeled in Prisma while vector reads/writes use parameterized raw queries.
-- GitHub and OpenAI are retried only for bounded transient failures; durable jobs retain terminal errors for investigation.
-- The project favors a small PostgreSQL-backed queue over introducing Redis or a managed workflow platform.
-- The dashboard identity provider is deliberately a typed integration seam rather than a fake authentication implementation.
+Both structured worker logs and persisted failure messages redact common token, secret, password, authorization, and connection-string forms. Raw webhook bodies, diffs, OAuth codes, and access tokens are never logged.
+
+### GitHub identity and membership
+
+`GET /api/auth/github` starts a state-protected GitHub App-compatible OAuth flow; its callback creates/updates only the authenticated GitHub `User`. During callback, the server asks GitHub for installations accessible to that user and grants memberships only for installations/repositories GitHub reports and that already exist locally. Personal-account installations map to `ADMIN`; organization installations map to `VIEWER` unless an application-side administrator grants a stronger role.
+
+The dashboard is deliberately empty when unauthenticated. It never falls back to global/demo data. Authenticated API routes enforce membership:
+
+```text
+GET   /api/repos
+PATCH /api/repos/:repositoryId                 {"enabled": boolean}  # ADMIN/OWNER
+POST  /api/repos/:repositoryId/index           {"force": boolean}    # ADMIN/OWNER
+POST  /api/reviews/:reviewId/retry                              # ADMIN/OWNER, failed only
+```
+
+## RAG indexing and provenance
+
+Repository standards indexing is a durable `RepositoryIndexJob`, not request-time work. Index jobs retain status, attempts, errors, timestamps, document/chunk counts, embedding model, and lease state on the repository and job records.
+
+Queue a reindex through the authorized API or manually:
+
+```bash
+npm run index:repository -- --repository-id <repository-database-id> --force true
+```
+
+The indexer allows only selected Markdown guidance paths, persists source path/content SHA/chunk provenance with each vector, and removes stale documents only after a complete successful snapshot. Retrieval is always constrained by repository, branch, and embedding model. The prompt receives stable `[standard:path#chunk@sha]` labels; only citations that match retrieved labels are retained and persisted in finding evidence.
+
+## Demo fixture
+
+The dashboard does not seed data automatically. To create clearly labeled local demo records only:
+
+```bash
+npm run seed:demo
+```
+
+The fixture creates no GitHub review or external side effect.
 
 ## Quality checks
 
 ```bash
+npm run prisma:generate
+npm run prisma:validate
 npm run typecheck
 npm test
 npm run build
 ```
 
-## Future enhancements
+`.github/workflows/ci.yml` runs the same checks against a local `pgvector/pgvector:pg16` service, applies the Prisma schema, and executes the optional pgvector integration test without external database credentials.
 
-- Wire GitHub OAuth or an enterprise SSO provider to the dashboard membership scope.
-- Add lease recovery, publication outbox reconciliation, and stale-head revalidation for worker crash/race resilience.
-- Add organization policy management, richer review filtering, and trend analytics.
-- Add multi-language code context, configurable review rules, and cost/latency observability.
+## Scope and limitations
+
+- GitHub publication is at-least-once as described above; marker reconciliation lowers, but cannot eliminate, external duplicate risk.
+- OAuth membership synchronization depends on GitHub returning the user's accessible App installations. Existing installations/repositories are not fabricated when GitHub is unavailable.
+- The service indexes bounded standards documents, not arbitrary codebases or repository history.
+- Production deployments should run migrations, dashboard, and worker separately with managed PostgreSQL backups and secret-manager-provided environment variables.

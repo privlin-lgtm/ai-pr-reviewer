@@ -59,6 +59,32 @@ enum ReviewJobStatus {
   FAILED
 }
 
+enum PublicationStatus {
+  QUEUED
+  PROCESSING
+  PUBLISHED
+  FAILED
+}
+
+enum PublicationKind {
+  GITHUB_REVIEW
+}
+
+enum RepositoryIndexStatus {
+  IDLE
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum RepositoryIndexJobStatus {
+  QUEUED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 enum WebhookDeliveryStatus {
   RECEIVED
   ENQUEUED
@@ -107,12 +133,17 @@ model Repository {
   isArchived         Boolean  @default(false)
   reviewSettings     Json?
   lastIndexedAt      DateTime?
+  lastIndexAttemptAt DateTime?
+  lastIndexError     String?  @db.Text
+  indexStatus        RepositoryIndexStatus @default(IDLE)
+  indexEmbeddingModel String?
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   installation GitHubInstallation      @relation(fields: [installationId], references: [id], onDelete: Cascade)
   memberships  RepositoryMembership[]
   documents    RepositoryDocument[]
+  indexJobs    RepositoryIndexJob[]
   pullRequests PullRequest[]
 
   @@index([installationId])
@@ -202,6 +233,7 @@ model Review {
   pullRequest PullRequest    @relation(fields: [pullRequestId], references: [id], onDelete: Cascade)
   findings    Finding[]
   metrics     ReviewMetrics?
+  publication PublicationOutbox?
 
   @@unique([pullRequestId, headSha])
   @@index([pullRequestId, createdAt])
@@ -225,14 +257,42 @@ model Finding {
   suggestedFix         String?         @db.Text
   evidence             Json?
   status               FindingStatus   @default(PENDING)
+  publicationOutboxId  String?
   publishedAt          DateTime?
   createdAt            DateTime        @default(now())
   updatedAt            DateTime        @updatedAt
 
-  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  review             Review             @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  publicationOutbox  PublicationOutbox? @relation(fields: [publicationOutboxId], references: [id], onDelete: SetNull)
 
   @@unique([reviewId, fingerprint])
   @@index([reviewId, status, severity])
+  @@index([publicationOutboxId, status])
+}
+
+model PublicationOutbox {
+  id                 String            @id @default(cuid())
+  reviewId           String            @unique
+  kind               PublicationKind   @default(GITHUB_REVIEW)
+  idempotencyKey     String            @unique
+  payload            Json
+  status             PublicationStatus @default(QUEUED)
+  attempts           Int               @default(0)
+  runAfter           DateTime          @default(now())
+  lockedAt           DateTime?
+  lockedBy           String?
+  leaseExpiresAt     DateTime?
+  lastError          String?           @db.Text
+  githubReviewId     BigInt?           @unique
+  publishedAt        DateTime?
+  createdAt          DateTime          @default(now())
+  updatedAt          DateTime          @updatedAt
+
+  review   Review    @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  findings Finding[]
+
+  @@index([status, runAfter])
+  @@index([status, leaseExpiresAt])
 }
 
 model ReviewMetrics {
@@ -283,6 +343,9 @@ model ReviewJob {
   runAfter              DateTime        @default(now())
   lockedAt              DateTime?
   lockedBy              String?
+  leaseExpiresAt        DateTime?
+  lastHeartbeatAt       DateTime?
+  failureCode           String?
   lastError             String?         @db.Text
   createdAt             DateTime        @default(now())
   updatedAt             DateTime        @updatedAt
@@ -291,4 +354,44 @@ model ReviewJob {
 
   @@unique([repositoryGithubId, pullRequestNumber, headSha])
   @@index([status, runAfter])
+  @@index([status, leaseExpiresAt])
+}
+
+model RepositoryIndexJob {
+  id                    String                   @id @default(cuid())
+  repositoryId          String
+  installationGithubId  BigInt
+  owner                 String
+  repositoryName        String
+  branch                String
+  force                 Boolean                  @default(false)
+  status                RepositoryIndexJobStatus @default(QUEUED)
+  attempts              Int                      @default(0)
+  runAfter              DateTime                 @default(now())
+  lockedAt              DateTime?
+  lockedBy              String?
+  leaseExpiresAt        DateTime?
+  lastHeartbeatAt       DateTime?
+  failureCode           String?
+  lastError             String?                  @db.Text
+  startedAt             DateTime?
+  completedAt           DateTime?
+  indexedDocuments      Int?
+  indexedChunks         Int?
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  repository Repository @relation(fields: [repositoryId], references: [id], onDelete: Cascade)
+
+  @@unique([repositoryId, branch])
+  @@index([status, runAfter])
+  @@index([status, leaseExpiresAt])
+}
+
+model WebhookRateLimit {
+  key             String   @id
+  windowStartedAt DateTime
+  count           Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
