@@ -45,23 +45,23 @@ export class PrismaWebhookRateLimiter implements WebhookRateLimiter {
       INSERT INTO "WebhookRateLimit" (
         "key", "windowStartedAt", "count", "createdAt", "updatedAt"
       ) VALUES (
-        ${key}, NOW(), 1, NOW(), NOW()
+        ${key}, (NOW() AT TIME ZONE 'UTC'), 1, (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC')
       )
       ON CONFLICT ("key") DO UPDATE
       SET
         "count" = CASE
           WHEN "WebhookRateLimit"."windowStartedAt" <=
-            NOW() - (${this.windowMilliseconds} * INTERVAL '1 millisecond')
+            (NOW() AT TIME ZONE 'UTC') - (${this.windowMilliseconds} * INTERVAL '1 millisecond')
           THEN 1
           ELSE "WebhookRateLimit"."count" + 1
         END,
         "windowStartedAt" = CASE
           WHEN "WebhookRateLimit"."windowStartedAt" <=
-            NOW() - (${this.windowMilliseconds} * INTERVAL '1 millisecond')
-          THEN NOW()
+            (NOW() AT TIME ZONE 'UTC') - (${this.windowMilliseconds} * INTERVAL '1 millisecond')
+          THEN (NOW() AT TIME ZONE 'UTC')
           ELSE "WebhookRateLimit"."windowStartedAt"
         END,
-        "updatedAt" = NOW()
+        "updatedAt" = (NOW() AT TIME ZONE 'UTC')
       RETURNING "count", "windowStartedAt"
     `);
     const row = rows[0];

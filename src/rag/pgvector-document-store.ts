@@ -36,7 +36,7 @@ export class PgVectorRepositoryDocumentStore implements RepositoryDocumentStore 
               contentSha: document.contentSha,
               sourcePath: document.path,
             })}::jsonb,
-            NOW(), NOW()
+            (NOW() AT TIME ZONE 'UTC'), (NOW() AT TIME ZONE 'UTC')
           )
           ON CONFLICT ("repositoryId", "path", "branch", "contentSha", "chunkIndex")
           DO UPDATE SET
@@ -45,7 +45,7 @@ export class PgVectorRepositoryDocumentStore implements RepositoryDocumentStore 
             "embeddingDimensions" = EXCLUDED."embeddingDimensions",
             "embedding" = EXCLUDED."embedding",
             "metadata" = EXCLUDED."metadata",
-            "updatedAt" = NOW()
+            "updatedAt" = (NOW() AT TIME ZONE 'UTC')
         `;
       }
 
