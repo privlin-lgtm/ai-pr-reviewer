@@ -33,6 +33,10 @@ export const StandardViolationSchema = z
   })
   .strict();
 
+export const MAXIMUM_TITLE_CHARACTERS = 200;
+export const MAXIMUM_TEXT_CHARACTERS = 4_000;
+const MAXIMUM_PATH_CHARACTERS = 1_000;
+
 const DiffSideSchema = z.enum(["LEFT", "RIGHT"]).nullable();
 const LineNumberSchema = z.number().int().positive().nullable();
 
@@ -41,14 +45,14 @@ export const AIReviewFindingSchema = z
     category: FindingCategorySchema.default("MAINTAINABILITY"),
     confidence: z.number().min(0).max(1).default(0.5),
     endLine: LineNumberSchema.default(null),
-    path: z.string().min(1).default("<repository>"),
-    rationale: z.string().min(1).default("No rationale was supplied."),
-    recommendation: z.string().min(1),
+    path: z.string().min(1).max(MAXIMUM_PATH_CHARACTERS).default("<repository>"),
+    rationale: z.string().min(1).max(MAXIMUM_TEXT_CHARACTERS).default("No rationale was supplied."),
+    recommendation: z.string().min(1).max(MAXIMUM_TEXT_CHARACTERS),
     severity: FindingSeveritySchema,
     side: DiffSideSchema.default(null),
     startLine: LineNumberSchema.default(null),
     standardViolation: StandardViolationSchema.nullable().default(null),
-    title: z.string().min(1),
+    title: z.string().min(1).max(MAXIMUM_TITLE_CHARACTERS),
   })
   .strict()
   .superRefine((finding, context) => {
@@ -81,10 +85,10 @@ export const AIReviewFindingSchema = z
 
 export const AIReviewRecommendationSchema = z
   .object({
-    detail: z.string().min(1),
+    detail: z.string().min(1).max(MAXIMUM_TEXT_CHARACTERS),
     priority: FindingSeveritySchema,
-    relatedPaths: z.array(z.string().min(1)).max(20),
-    title: z.string().min(1),
+    relatedPaths: z.array(z.string().min(1).max(MAXIMUM_PATH_CHARACTERS)).max(20),
+    title: z.string().min(1).max(MAXIMUM_TITLE_CHARACTERS),
   })
   .strict();
 
@@ -92,7 +96,7 @@ export const AIReviewResponseSchema = z
   .object({
     findings: z.array(AIReviewFindingSchema).max(100),
     recommendations: z.array(AIReviewRecommendationSchema).max(20),
-    summary: z.string().min(1),
+    summary: z.string().min(1).max(MAXIMUM_TEXT_CHARACTERS),
   })
   .strict();
 

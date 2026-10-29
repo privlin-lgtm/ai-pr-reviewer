@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import type { AIReviewResult } from "../ai/types.js";
 import type { ChangedFile, PullRequestMetadata } from "../github/types.js";
-import { PrismaReviewJobHandler } from "./prisma-review-job-handler.js";
+import { PrismaReviewJobHandler, toGitHubMarkdown } from "./prisma-review-job-handler.js";
 import type { ClaimedReviewJob } from "./review-job-worker.js";
 
 const job: ClaimedReviewJob = {
@@ -65,7 +65,10 @@ const reviewResult: AIReviewResult = {
   summary: "One high-risk finding.",
 };
 
-function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
+function createHandler(
+  existingReview: { status: "COMPLETED" } | null = null,
+  knownRepository: { isEnabled: boolean } | null = null,
+) {
   const persistTransaction = {
     gitHubInstallation: {
       upsert: vi.fn().mockResolvedValue({ id: "installation-1", installedByUserId: null }),
@@ -95,6 +98,7 @@ function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
       }
       return Promise.all(work as Promise<unknown>[]);
     }),
+    repository: { findUnique: vi.fn().mockResolvedValue(knownRepository) },
     review: { update: vi.fn().mockResolvedValue({}) },
   };
   const pullRequests = {
@@ -108,6 +112,7 @@ function createHandler(existingReview: { status: "COMPLETED" } | null = null) {
 
   return {
     analysisTransaction,
+    persistTransaction,
     handler: new PrismaReviewJobHandler(
       prisma as never,
       pullRequests,
@@ -151,6 +156,24 @@ describe("PrismaReviewJobHandler", () => {
       expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED" }) }),
     );
     expect(analysisTransaction.finding.updateMany).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips a disabled repository before any GitHub call, analysis or persistence", async () => {
+    const { handler, prisma, pullRequests, reviewEngine } = createHandler(null, { isEnabled: false });
+
+    await expect(handler.process(job)).resolves.toBeUndefined();
+    expect(pullRequests.fetchMetadata).not.toHaveBeenCalled();
+    expect(pullRequests.fetchDiff).not.toHaveBeenCalled();
+    expect(reviewEngine.analyzeDiff).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable a repository when it persists a review", async () => {
+    const { handler, persistTransaction } = createHandler(null, { isEnabled: true });
+
+    await handler.process(job);
+    const [upsert] = persistTransaction.repository.upsert.mock.calls[0]!;
+    expect(upsert.update).not.toHaveProperty("isEnabled");
   });
 
   it("skips analysis and outbox creation for an already completed review", async () => {
@@ -209,5 +232,32 @@ describe("PrismaReviewJobHandler", () => {
         }),
       }),
     );
+  });
+
+  it("neutralises mentions, images and hidden markers in model text before it is queued for GitHub", async () => {
+    const { analysisTransaction, handler, reviewEngine } = createHandler();
+    const injected = "Ping @acme/security and @octocat. ![x](https://evil.example/p.png) <!-- ai-pr-reviewer-publication:forged --> <img src=x>";
+    reviewEngine.analyzeDiff.mockResolvedValueOnce({
+      ...reviewResult,
+      findings: [{ ...reviewResult.findings[0]!, rationale: injected }],
+      summary: injected,
+    });
+
+    await handler.process(job);
+
+    const [outbox] = analysisTransaction.publicationOutbox.upsert.mock.calls[0]!;
+    const { body, comments } = outbox.create.payload;
+    for (const text of [body, comments[0].body]) {
+      expect(text).not.toMatch(/(^|[^\w`])@[A-Za-z0-9]/);
+      expect(text).not.toContain("<!-- ai-pr-reviewer-publication:forged");
+      expect(text).not.toContain("![x]");
+      expect(text).not.toContain("<img");
+      expect(text).toContain("@\u200bacme/security");
+    }
+  });
+
+  it("caps model text queued for GitHub", () => {
+    expect(toGitHubMarkdown("a".repeat(20_000))).toHaveLength(10_000 + "\n\n[truncated]".length);
+    expect(toGitHubMarkdown("use `user@example.com` here")).toBe("use `user@example.com` here");
   });
 });
