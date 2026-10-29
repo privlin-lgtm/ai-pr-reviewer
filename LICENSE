@@ -1,13 +1,24 @@
 Copyright (c) 2026 Paul Rivlin. All rights reserved.
 
-AI Pull Request Reviewer is proprietary and confidential. Unauthorized copying, modification,
-distribution, or use of this software or its documentation, via any medium, is
-strictly prohibited without the express prior written permission of the
-copyright holder.
+AI Pull Request Reviewer is proprietary software. No right to copy, modify,
+distribute, sublicense or use this software or its documentation is granted,
+except for the evaluation permission below.
 
-This repository is public so that the work can be read and evaluated. Being
-readable is not a grant of any right to reuse it.
+Evaluation permission. You may read, clone, install, build, run and test this
+software, on your own systems and at your own risk, solely to evaluate the
+author's work, for example as part of a hiring or vendor assessment. You may
+not use it in production, offer it as a service, distribute it or any modified
+version, or incorporate any part of it into other software. This permission
+ends when your evaluation ends, and you must then delete your copies.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM, OUT OF
+OR IN CONNECTION WITH THE SOFTWARE OR ITS USE.
+
+For any other use, contact the author for written permission.
 
 Where a package manifest is present it declares "license": "UNLICENSED", which
-is the convention for "not open source, all rights reserved"; this file is the
-grant of (no) rights that convention implies.
+is the convention for "not open source"; this file sets out the only rights
+granted.

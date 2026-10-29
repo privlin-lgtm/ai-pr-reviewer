@@ -8,6 +8,7 @@ import {
   tryLoadGitHubAppIdentityConfig,
 } from "../src/auth/github-app-identity";
 import { isDashboardDemoMode, loadDashboardData } from "../src/dashboard/data";
+import { isPublicDemoDeployment } from "../src/dashboard/demo-data";
 import {
   resolveDashboardScope,
   type DashboardIdentity,
@@ -39,11 +40,11 @@ export default async function DashboardPage() {
           </p>
         </div>
         <p className="text-sm text-slate-500">
-          {result.status === "demo" ? "Local demo data" : "Server-rendered from PostgreSQL"}
+          {result.status === "demo" ? "Demo data" : "Server-rendered from PostgreSQL"}
         </p>
       </header>
 
-      {result.status === "demo" ? <DemoModeNotice /> : null}
+      {result.status === "demo" ? <DemoModeNotice publicDeployment={isPublicDemoDeployment()} /> : null}
 
       {result.status === "unconfigured" ? (
         <DatabaseNotice
@@ -150,17 +151,23 @@ function DashboardContent({
   );
 }
 
-function DemoModeNotice() {
+function DemoModeNotice({ publicDeployment }: Readonly<{ publicDeployment: boolean }>) {
   return (
     <section
-      aria-label="Local dashboard demo data"
+      aria-label="Dashboard demo data"
       className="mt-7 rounded-2xl border border-sky-400/40 bg-sky-950/25 p-5"
     >
-      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">Local demo mode</p>
+      <p className="text-sm font-semibold uppercase tracking-[0.2em] text-sky-300">
+        {publicDeployment ? "Public demo" : "Local demo mode"}
+      </p>
       <p className="mt-2 break-words text-sm leading-6 text-slate-300">
-        This deterministic in-memory sample is shown only because
-        <code className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 text-sky-200">DASHBOARD_DEMO_MODE=true</code>
-        is enabled during development. It does not access PostgreSQL or represent production data.
+        {publicDeployment
+          ? "Everything on this page is a fixed, made-up sample. This deployment has no database, GitHub App or AI model connected, and its API routes are switched off. The reviewer itself runs as a GitHub App with a separate worker; see the repository README."
+          : <>
+              This deterministic in-memory sample is shown only because
+              <code className="mx-1 rounded bg-slate-800 px-1.5 py-0.5 text-sky-200">DASHBOARD_DEMO_MODE=true</code>
+              is enabled during development. It does not access PostgreSQL or represent production data.
+            </>}
       </p>
     </section>
   );

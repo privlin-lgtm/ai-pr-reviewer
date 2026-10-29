@@ -62,11 +62,23 @@ export const dashboardDemoData: DashboardData = {
   },
 };
 
-export function isDashboardDemoMode(
-  environment: Readonly<{
-    DASHBOARD_DEMO_MODE?: string;
-    NODE_ENV?: string;
-  }> = process.env,
+export interface DemoEnvironment {
+  DASHBOARD_DEMO_MODE?: string;
+  NODE_ENV?: string;
+  PUBLIC_DEMO_DEPLOYMENT?: string;
+}
+
+export function isPublicDemoDeployment(
+  environment: Readonly<DemoEnvironment> = process.env,
 ): boolean {
-  return environment.NODE_ENV === "development" && environment.DASHBOARD_DEMO_MODE === "true";
+  return environment.PUBLIC_DEMO_DEPLOYMENT === "true";
+}
+
+export function isDashboardDemoMode(
+  environment: Readonly<DemoEnvironment> = process.env,
+): boolean {
+  return (
+    isPublicDemoDeployment(environment) ||
+    (environment.NODE_ENV === "development" && environment.DASHBOARD_DEMO_MODE === "true")
+  );
 }
