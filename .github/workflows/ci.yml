@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [master]
 
 jobs:
   verify:
@@ -38,6 +38,7 @@ jobs:
           node --input-type=module -e
           "import pg from 'pg'; const client = new pg.Client({ connectionString: process.env.DATABASE_URL }); await client.connect(); await client.query('CREATE EXTENSION IF NOT EXISTS vector'); await client.end();"
       - run: npx prisma migrate deploy
+      - run: npm run lint
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:integration
