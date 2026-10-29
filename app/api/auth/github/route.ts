@@ -17,7 +17,7 @@ export async function GET(request: Request): Promise<Response> {
         "set-cookie": createOAuthStateCookie(
           authorization.state,
           config,
-          useSecureCookies(request),
+          shouldUseSecureCookies(request),
         ),
       },
       status: 302,
@@ -30,6 +30,6 @@ export async function GET(request: Request): Promise<Response> {
   }
 }
 
-function useSecureCookies(request: Request): boolean {
+function shouldUseSecureCookies(request: Request): boolean {
   return process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";
 }

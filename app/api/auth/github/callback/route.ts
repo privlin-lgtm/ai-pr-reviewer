@@ -20,7 +20,7 @@ export async function GET(request: Request): Promise<Response> {
     );
   }
 
-  const secure = useSecureCookies(request);
+  const secure = shouldUseSecureCookies(request);
   const url = new URL(request.url);
   const code = url.searchParams.get("code");
   if (
@@ -61,6 +61,6 @@ function redirect(url: URL, cookies: string | string[]): Response {
   });
 }
 
-function useSecureCookies(request: Request): boolean {
+function shouldUseSecureCookies(request: Request): boolean {
   return process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";
 }
