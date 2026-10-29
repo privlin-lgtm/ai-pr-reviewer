@@ -176,3 +176,7 @@ npm run build
 - OAuth membership synchronization depends on GitHub returning the user's accessible App installations. Existing installations/repositories are not fabricated when GitHub is unavailable.
 - The service indexes bounded standards documents, not arbitrary codebases or repository history.
 - Production deployments should run migrations, dashboard, and worker separately with managed PostgreSQL backups and secret-manager-provided environment variables.
+
+## Licence
+
+All rights reserved, with one exception: you may clone, build, run and test this code to evaluate the work, for example in a hiring or vendor assessment. See [LICENSE](LICENSE) for the exact terms.
