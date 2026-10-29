@@ -39,12 +39,14 @@ Requirements: Node.js 20+, PostgreSQL with `pgvector`, and a GitHub App.
 
 ```bash
 npm ci
-export DATABASE_URL=postgresql://...
 npm run prisma:generate
 npm run prisma:validate
+export DATABASE_URL=postgresql://...
 npx prisma migrate deploy
 npm run dev
 ```
+
+`prisma generate` and `prisma validate` need no database. Migrations, the app and the worker need `DATABASE_URL`.
 
 Server-only configuration:
 
@@ -157,15 +159,19 @@ The flag is honored only when `NODE_ENV=development`; it supplies a typed, deter
 ```bash
 npm run prisma:generate
 npm run prisma:validate
+npm run lint
 npm run typecheck
 npm test
+RUN_PGVECTOR_INTEGRATION=1 npm run test:integration
 npm run build
 ```
 
-`.github/workflows/ci.yml` runs the same checks against a local `pgvector/pgvector:pg16` service, applies the Prisma schema, and executes the optional pgvector integration test without external database credentials.
+`.github/workflows/ci.yml` runs the same checks on pull requests and pushes to `master`, against a local `pgvector/pgvector:pg16` service, applies the Prisma schema, and executes the PostgreSQL integration tests without external database credentials. The integration tests include job claiming and leases with the database session set to Los Angeles, Israel and UTC time.
 
 ## Scope and limitations
 
+- Model output is untrusted. The diff and standards are fenced with a random per-request boundary; the response is schema-validated with length limits and an 8,192-token output cap; before anything is queued for GitHub, HTML comments, images and embedded media are neutralised, `@` mentions are broken so they notify nobody, and each text is capped at 10,000 characters.
+- Disabling a repository (`PATCH /api/repos/:repositoryId`) stops new reviews before any GitHub or model call. A later webhook does not re-enable it.
 - GitHub publication is at-least-once as described above; marker reconciliation lowers, but cannot eliminate, external duplicate risk.
 - OAuth membership synchronization depends on GitHub returning the user's accessible App installations. Existing installations/repositories are not fabricated when GitHub is unavailable.
 - The service indexes bounded standards documents, not arbitrary codebases or repository history.

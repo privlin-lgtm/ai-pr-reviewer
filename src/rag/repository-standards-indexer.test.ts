@@ -11,7 +11,6 @@ import {
 } from "./octokit-repository-standards-source.js";
 import { RepositoryStandardsIndexer } from "./repository-standards-indexer.js";
 import type {
-  EmbeddedRepositoryDocument,
   RepositoryDocumentStore,
   RepositoryStandardsSource,
 } from "./types.js";
@@ -109,7 +108,7 @@ test("cleans stale standards only after all replacement documents succeed", asyn
       snapshotCompleted = true;
       completedPaths = scope.paths;
     },
-    replaceDocument: async (_document: EmbeddedRepositoryDocument) => undefined,
+    replaceDocument: async () => undefined,
     search: async () => [],
   };
   const successfulIndexer = new RepositoryStandardsIndexer(

@@ -11,7 +11,7 @@ export async function POST(request: Request): Promise<Response> {
     return new Response(null, {
       headers: {
         "cache-control": "no-store",
-        "set-cookie": clearSessionCookie(config, useSecureCookies(request)),
+        "set-cookie": clearSessionCookie(config, shouldUseSecureCookies(request)),
       },
       status: 204,
     });
@@ -20,6 +20,6 @@ export async function POST(request: Request): Promise<Response> {
   }
 }
 
-function useSecureCookies(request: Request): boolean {
+function shouldUseSecureCookies(request: Request): boolean {
   return process.env.NODE_ENV === "production" || new URL(request.url).protocol === "https:";
 }

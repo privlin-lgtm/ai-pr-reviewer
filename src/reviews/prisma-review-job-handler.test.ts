@@ -33,7 +33,7 @@ test("cancels a stale claimed head before analysis or persistence", async () => 
     publishReview: async () => assert.fail("stale jobs must not publish"),
   };
   const handler = new PrismaReviewJobHandler(
-    {} as never,
+    { repository: { findUnique: async () => null } } as never,
     pullRequests,
     {
       analyzeDiff: async () => {

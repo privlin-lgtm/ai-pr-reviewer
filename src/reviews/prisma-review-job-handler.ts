@@ -47,6 +47,14 @@ export class PrismaReviewJobHandler implements ReviewJobHandler {
   }
 
   async process(job: ClaimedReviewJob): Promise<"cancelled" | void> {
+    const knownRepository = await this.prisma.repository.findUnique({
+      select: { isEnabled: true },
+      where: { githubRepositoryId: job.repositoryGithubId },
+    });
+    if (knownRepository?.isEnabled === false) {
+      return;
+    }
+
     const target = {
       installationId: Number(job.installationGithubId),
       owner: job.owner,
@@ -145,7 +153,6 @@ export class PrismaReviewJobHandler implements ReviewJobHandler {
           defaultBranch: metadata.baseRef,
           installationId: installation.id,
           isArchived: false,
-          isEnabled: true,
           name: metadata.repository,
           ownerLogin: metadata.owner,
         },
@@ -465,7 +472,9 @@ function toPublicationCandidates(
 
     return [{
       comment: {
-        body: `**${finding.severity} — ${finding.title}**\n\n${finding.rationale}\n\nSuggested fix: ${finding.recommendation}`,
+        body: toGitHubMarkdown(
+          `**${finding.severity} — ${finding.title}**\n\n${finding.rationale}\n\nSuggested fix: ${finding.recommendation}`,
+        ),
         line: finding.endLine,
         path: finding.path,
         side: finding.side,
@@ -523,8 +532,23 @@ function buildReviewBody(result: AIReviewResult, riskScore: number): string {
     "",
     `Risk score: **${riskScore}/10**`,
     "",
-    result.summary,
+    toGitHubMarkdown(result.summary),
     "",
     `${result.findings.length} finding(s) analyzed; inline comments include only high-confidence findings on changed lines.`,
   ].join("\n");
+}
+
+const MAXIMUM_GITHUB_MARKDOWN_CHARACTERS = 10_000;
+
+export function toGitHubMarkdown(modelText: string): string {
+  const neutralized = modelText
+    .replace(/<!--/g, "&lt;!--")
+    .replace(/<\/?(?:img|picture|source|video|audio|iframe|details|summary)\b/gi, (tag) =>
+      tag.replace("<", "&lt;"),
+    )
+    .replace(/!\[/g, "!\\[")
+    .replace(/(^|[^\w`])@(?=[A-Za-z0-9])/g, "$1@\u200b");
+  return neutralized.length <= MAXIMUM_GITHUB_MARKDOWN_CHARACTERS
+    ? neutralized
+    : `${neutralized.slice(0, MAXIMUM_GITHUB_MARKDOWN_CHARACTERS)}\n\n[truncated]`;
 }

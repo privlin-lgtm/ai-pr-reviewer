@@ -73,19 +73,19 @@ export class PrismaPublicationOutboxStore implements PublicationOutboxStore {
               "lastError",
               'Publication lease expired after the maximum number of attempts.'
             ),
-            "updatedAt" = NOW()
+            "updatedAt" = (NOW() AT TIME ZONE 'UTC')
           WHERE "status" = 'PROCESSING'::"PublicationStatus"
-            AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= NOW())
+            AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= (NOW() AT TIME ZONE 'UTC'))
             AND "attempts" >= ${this.maximumAttempts}
         ),
         candidate AS (
           SELECT "id"
           FROM "PublicationOutbox"
           WHERE (
-            ("status" = 'QUEUED'::"PublicationStatus" AND "runAfter" <= NOW())
+            ("status" = 'QUEUED'::"PublicationStatus" AND "runAfter" <= (NOW() AT TIME ZONE 'UTC'))
             OR (
               "status" = 'PROCESSING'::"PublicationStatus"
-              AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= NOW())
+              AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= (NOW() AT TIME ZONE 'UTC'))
               AND "attempts" < ${this.maximumAttempts}
             )
           )
@@ -101,10 +101,10 @@ export class PrismaPublicationOutboxStore implements PublicationOutboxStore {
         SET
           "status" = 'PROCESSING'::"PublicationStatus",
           "attempts" = outbox."attempts" + 1,
-          "lockedAt" = NOW(),
+          "lockedAt" = (NOW() AT TIME ZONE 'UTC'),
           "lockedBy" = ${workerId},
-          "leaseExpiresAt" = NOW() + (${this.leaseDurationMilliseconds} * INTERVAL '1 millisecond'),
-          "updatedAt" = NOW()
+          "leaseExpiresAt" = (NOW() AT TIME ZONE 'UTC') + (${this.leaseDurationMilliseconds} * INTERVAL '1 millisecond'),
+          "updatedAt" = (NOW() AT TIME ZONE 'UTC')
         FROM candidate
         WHERE outbox."id" = candidate."id"
         RETURNING

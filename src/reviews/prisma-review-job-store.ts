@@ -75,19 +75,19 @@ export class PrismaReviewJobStore implements ReviewJobStore {
               "lastError",
               'Worker lease expired after the maximum number of attempts.'
             ),
-            "updatedAt" = NOW()
+            "updatedAt" = (NOW() AT TIME ZONE 'UTC')
           WHERE "status" = 'PROCESSING'::"ReviewJobStatus"
-            AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= NOW())
+            AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= (NOW() AT TIME ZONE 'UTC'))
             AND "attempts" >= ${this.maximumAttempts}
         ),
         candidate AS (
           SELECT "id"
           FROM "ReviewJob"
           WHERE (
-            ("status" = 'QUEUED'::"ReviewJobStatus" AND "runAfter" <= NOW())
+            ("status" = 'QUEUED'::"ReviewJobStatus" AND "runAfter" <= (NOW() AT TIME ZONE 'UTC'))
             OR (
               "status" = 'PROCESSING'::"ReviewJobStatus"
-              AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= NOW())
+              AND ("leaseExpiresAt" IS NULL OR "leaseExpiresAt" <= (NOW() AT TIME ZONE 'UTC'))
               AND "attempts" < ${this.maximumAttempts}
             )
           )
@@ -103,12 +103,12 @@ export class PrismaReviewJobStore implements ReviewJobStore {
         SET
           "status" = 'PROCESSING'::"ReviewJobStatus",
           "attempts" = job."attempts" + 1,
-          "lockedAt" = NOW(),
+          "lockedAt" = (NOW() AT TIME ZONE 'UTC'),
           "lockedBy" = ${workerId},
-          "leaseExpiresAt" = NOW() + (${this.leaseDurationMilliseconds} * INTERVAL '1 millisecond'),
-          "lastHeartbeatAt" = NOW(),
+          "leaseExpiresAt" = (NOW() AT TIME ZONE 'UTC') + (${this.leaseDurationMilliseconds} * INTERVAL '1 millisecond'),
+          "lastHeartbeatAt" = (NOW() AT TIME ZONE 'UTC'),
           "failureCode" = NULL,
-          "updatedAt" = NOW()
+          "updatedAt" = (NOW() AT TIME ZONE 'UTC')
         FROM candidate
         WHERE job."id" = candidate."id"
         RETURNING
