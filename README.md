@@ -2,6 +2,8 @@
 
 A GitHub App-backed pull-request reviewer with durable PostgreSQL work queues, validated AI findings, pgvector standards retrieval, and a fail-closed dashboard.
 
+**Live demo:** [ai-pr-reviewer-demo.vercel.app](https://ai-pr-reviewer-demo.vercel.app). It shows the dashboard with fixed sample data. It is not connected to a database, GitHub App or AI model, and its API routes are switched off (see [Public demo deployment](#public-demo-deployment)).
+
 ## Dashboard previews
 
 These screenshots use the explicit local demo mode. The sample is deterministic, in-memory, and does not access PostgreSQL or represent production data.
