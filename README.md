@@ -154,6 +154,12 @@ npm run dev
 
 The flag is honored only when `NODE_ENV=development`; it supplies a typed, deterministic in-memory dashboard view model. Without this explicit flag, the dashboard continues to fail closed when authentication or PostgreSQL is unavailable.
 
+### Public demo deployment
+
+`PUBLIC_DEMO_DEPLOYMENT=true` turns a production build into a read-only public demo. The dashboard serves the same fixed sample with a "Public demo" banner. `proxy.ts` answers every `/api/*` route with 404, so sign-in, the webhook, repository settings and retries are all off. The deployment needs no database, GitHub App or OpenAI key, and none should be set on it. Only the exact value `true` enables it. Without it, a production build never shows demo data.
+
+To deploy on Vercel: import the repository, keep the detected Next.js settings, add the one environment variable `PUBLIC_DEMO_DEPLOYMENT=true`, and deploy. `npm install` runs `prisma generate`, which needs no database.
+
 ## Quality checks
 
 ```bash
