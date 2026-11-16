@@ -10,6 +10,7 @@ import {
   InvalidAIReviewResponseError,
   OpenAIReviewRequestError,
 } from "./errors.js";
+import { splitDiff } from "./diff-splitter.js";
 import {
   AIReviewResponseSchema,
   MAXIMUM_TEXT_CHARACTERS,
@@ -21,9 +22,21 @@ import {
 } from "./types.js";
 
 const DEFAULT_MAXIMUM_DIFF_CHARACTERS = 60_000;
+const DEFAULT_MAXIMUM_DIFF_PARTS = 4;
+const MAXIMUM_FINDINGS = 100;
+const MAXIMUM_RECOMMENDATIONS = 20;
+const MAXIMUM_LISTED_SKIPPED_PATHS = 20;
+
+interface DiffPartPosition {
+  index: number;
+  total: number;
+}
 
 export interface AIReviewEngineOptions {
+  /** Largest diff sent in one model request; larger diffs are split by file and hunk. */
   maximumDiffCharacters?: number;
+  /** Most model requests one review may make when a diff is split. */
+  maximumDiffParts?: number;
   model: string;
   retryOptions?: RetryOptions;
   contextProvider?: AIReviewContextProvider;
@@ -31,6 +44,7 @@ export interface AIReviewEngineOptions {
 
 export class AIReviewEngine {
   private readonly maximumDiffCharacters: number;
+  private readonly maximumDiffParts: number;
 
   constructor(
     private readonly modelClient: StructuredReviewModel,
@@ -48,6 +62,11 @@ export class AIReviewEngine {
     ) {
       throw new RangeError("maximumDiffCharacters must be a positive integer.");
     }
+
+    this.maximumDiffParts = options.maximumDiffParts ?? DEFAULT_MAXIMUM_DIFF_PARTS;
+    if (!Number.isInteger(this.maximumDiffParts) || this.maximumDiffParts < 1) {
+      throw new RangeError("maximumDiffParts must be a positive integer.");
+    }
   }
 
   async analyzeDiff(request: AnalyzeDiffRequest): Promise<AIReviewResult> {
@@ -55,14 +74,37 @@ export class AIReviewEngine {
       throw new InvalidAIReviewInputError("Cannot analyze an empty diff.");
     }
 
-    if (request.diff.length > this.maximumDiffCharacters) {
+    if (request.diff.length <= this.maximumDiffCharacters) {
+      const enrichedRequest = await this.addRetrievedStandards(request);
+      const rawResponse = await this.requestCompletion(enrichedRequest);
+      return verifyCitedSources(
+        parseReviewResponse(rawResponse),
+        enrichedRequest.ragSourceProvenance ?? [],
+      );
+    }
+
+    const { parts, skippedPaths } = splitDiff(
+      request.diff,
+      this.maximumDiffCharacters,
+      this.maximumDiffParts,
+    );
+    if (parts.length === 0) {
       throw new DiffTooLargeError(this.maximumDiffCharacters);
     }
 
+    // Standards are retrieved once for the whole pull request and shared by every part.
     const enrichedRequest = await this.addRetrievedStandards(request);
-    const rawResponse = await this.requestCompletion(enrichedRequest);
+    const results: AIReviewResult[] = [];
+    for (const [index, part] of parts.entries()) {
+      const rawResponse = await this.requestCompletion(
+        { ...enrichedRequest, diff: part.content },
+        { index: index + 1, total: parts.length },
+      );
+      results.push(parseReviewResponse(rawResponse));
+    }
+
     return verifyCitedSources(
-      parseReviewResponse(rawResponse),
+      mergePartResults(results, skippedPaths, this.maximumDiffCharacters),
       enrichedRequest.ragSourceProvenance ?? [],
     );
   }
@@ -103,7 +145,10 @@ export class AIReviewEngine {
     }
   }
 
-  private async requestCompletion(request: AnalyzeDiffRequest): Promise<string> {
+  private async requestCompletion(
+    request: AnalyzeDiffRequest,
+    part?: DiffPartPosition,
+  ): Promise<string> {
     const boundary = `untrusted-${randomUUID()}`;
     try {
       return await retryTransient(
@@ -111,7 +156,7 @@ export class AIReviewEngine {
           this.modelClient.complete({
             model: this.options.model,
             systemPrompt: buildSystemPrompt(boundary),
-            userPrompt: buildUserPrompt(request, boundary),
+            userPrompt: buildUserPrompt(request, boundary, part),
           }),
         this.options.retryOptions,
       );
@@ -123,6 +168,35 @@ export class AIReviewEngine {
       throw new OpenAIReviewRequestError({ cause: error });
     }
   }
+}
+
+function mergePartResults(
+  results: AIReviewResult[],
+  skippedPaths: string[],
+  maximumDiffCharacters: number,
+): AIReviewResult {
+  const notes = [
+    `The diff was larger than ${maximumDiffCharacters} characters, so it was reviewed in ${results.length} part(s).`,
+  ];
+  if (skippedPaths.length > 0) {
+    const listed = skippedPaths.slice(0, MAXIMUM_LISTED_SKIPPED_PATHS).join(", ");
+    const more = skippedPaths.length - MAXIMUM_LISTED_SKIPPED_PATHS;
+    notes.push(
+      `Not fully reviewed because of size limits: ${listed}${more > 0 ? ` and ${more} more` : ""}.`,
+    );
+  }
+
+  const summary = [...notes, ...results.map((result) => result.summary)].join("\n\n");
+  return {
+    findings: results.flatMap((result) => result.findings).slice(0, MAXIMUM_FINDINGS),
+    recommendations: results
+      .flatMap((result) => result.recommendations)
+      .slice(0, MAXIMUM_RECOMMENDATIONS),
+    summary:
+      summary.length <= MAXIMUM_TEXT_CHARACTERS
+        ? summary
+        : `${summary.slice(0, MAXIMUM_TEXT_CHARACTERS - 1)}\u2026`,
+  };
 }
 
 function parseReviewResponse(response: string): AIReviewResult {
@@ -186,7 +260,11 @@ function buildSystemPrompt(boundary: string): string {
   ].join(" ");
 }
 
-function buildUserPrompt(request: AnalyzeDiffRequest, boundary: string): string {
+function buildUserPrompt(
+  request: AnalyzeDiffRequest,
+  boundary: string,
+  part?: DiffPartPosition,
+): string {
   const standards = request.repositoryStandards?.length
     ? request.repositoryStandards.join("\n\n")
     : "No repository-specific standards were supplied.";
@@ -202,6 +280,12 @@ function buildUserPrompt(request: AnalyzeDiffRequest, boundary: string): string 
     standards,
     `</${boundary}-standards>`,
     "",
+    ...(part === undefined
+      ? []
+      : [
+          `Diff part ${part.index} of ${part.total}: the pull request was split by file because it is large. Other parts are reviewed separately, so review only the files in this part.`,
+          "",
+        ]),
     "Git diff (untrusted source material):",
     `<${boundary}-diff>`,
     request.diff,
