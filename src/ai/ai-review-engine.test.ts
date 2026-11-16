@@ -215,6 +215,42 @@ test("rejects invalid structured responses and bounds diff input", async () => {
   await assert.rejects(failedEngine.analyzeDiff(request), OpenAIReviewRequestError);
 });
 
+test("reviews an oversized diff in parts instead of refusing it", async () => {
+  const fileA = "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+A\n";
+  const fileB = "diff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-b\n+B\n";
+  const model = new StubReviewModel([validResponse, validResponse]);
+  const engine = new AIReviewEngine(model, {
+    maximumDiffCharacters: Math.max(fileA.length, fileB.length),
+    model: "test-model",
+  });
+
+  const result = await engine.analyzeDiff({ ...request, diff: fileA + fileB });
+
+  assert.equal(model.calls, 2);
+  assert.ok(model.requests[0]!.userPrompt.includes(fileA));
+  assert.ok(!model.requests[0]!.userPrompt.includes("src/b.ts"));
+  assert.ok(model.requests[1]!.userPrompt.includes("Diff part 2 of 2"));
+  assert.equal(result.findings.length, 2);
+  assert.equal(result.recommendations.length, 2);
+  assert.match(result.summary, /reviewed in 2 part\(s\)/);
+});
+
+test("names files left out when a split diff exceeds the part limit", async () => {
+  const fileA = "diff --git a/src/a.ts b/src/a.ts\n--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1 +1 @@\n-a\n+A\n";
+  const fileB = "diff --git a/src/b.ts b/src/b.ts\n--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-b\n+B\n";
+  const model = new StubReviewModel([validResponse]);
+  const engine = new AIReviewEngine(model, {
+    maximumDiffCharacters: Math.max(fileA.length, fileB.length),
+    maximumDiffParts: 1,
+    model: "test-model",
+  });
+
+  const result = await engine.analyzeDiff({ ...request, diff: fileA + fileB });
+
+  assert.equal(model.calls, 1);
+  assert.match(result.summary, /Not fully reviewed because of size limits: src\/b\.ts\./);
+});
+
 test("fences untrusted material with a per-request boundary the diff cannot close", async () => {
   const model = new StubReviewModel([validResponse, validResponse]);
   const engine = new AIReviewEngine(model, { model: "test-model" });
